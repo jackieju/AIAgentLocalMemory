@@ -36,7 +36,29 @@ interface FidelityThresholds {
   title: number;
 }
 
+function getThresholdForLevel(
+  level: FidelityLevel,
+  thresholds: FidelityThresholds,
+): number {
+  switch (level) {
+    case "f0":
+      return thresholds.full;
+    case "f1":
+      return thresholds.para;
+    case "f2":
+      return thresholds.gist;
+    case "f3":
+      return thresholds.title;
+    case "f4":
+      return 0;
+  }
+}
+
+const FIDELITY_ORDER: readonly FidelityLevel[] = ["f0", "f1", "f2", "f3", "f4"];
+
 export class ContextRenderer {
+  private previousFidelity: Map<string, FidelityLevel> = new Map();
+
   constructor(
     private readonly graph: NeuralGraph,
     private readonly workingMemory: WorkingMemory,
@@ -102,12 +124,20 @@ export class ContextRenderer {
     );
 
     const messages: RenderedMessage[] = [];
+    const nextFidelity = new Map<string, FidelityLevel>();
+    const hysteresis = this.config.hysteresisThreshold ?? 0.2;
     let total = 0;
     for (const ep of episodes) {
       const data = this.getEpisodicData(ep);
       if (!data) continue;
       const act = effectiveActivation.get(ep.id) ?? 0;
-      const fidelity = this.pickFidelity(act, thresholds);
+      const computed = this.pickFidelity(act, thresholds);
+      const skipHysteresis =
+        act === Number.POSITIVE_INFINITY || act === SUPPRESSED_ACTIVATION;
+      const fidelity = skipHysteresis
+        ? computed
+        : this.applyHysteresis(ep.id, computed, act, thresholds, hysteresis);
+      nextFidelity.set(ep.id, fidelity);
       const content = this.renderContent(data, fidelity);
       messages.push({
         tag: data.tag,
@@ -117,6 +147,7 @@ export class ContextRenderer {
       });
       total += this.estimateTokens(content);
     }
+    this.previousFidelity = nextFidelity;
 
     const systemInjection = await this.buildSystemInjection(
       sessionId,
@@ -264,6 +295,35 @@ export class ContextRenderer {
     if (activation >= t.gist) return "f2";
     if (activation >= t.title) return "f3";
     return "f4";
+  }
+
+  // Hysteresis: once a node has a fidelity, only switch when activation crosses
+  // the relevant threshold by more than `hysteresis`. Going down (e.g. f0 → f1)
+  // requires activation below the previous level's threshold by the margin;
+  // going up (e.g. f2 → f1) requires activation above the new level's threshold
+  // by the margin. Otherwise, retain the previous fidelity to keep prefixes stable.
+  private applyHysteresis(
+    nodeId: string,
+    newFidelity: FidelityLevel,
+    effectiveActivation: number,
+    thresholds: FidelityThresholds,
+    hysteresis: number,
+  ): FidelityLevel {
+    const prevFidelity = this.previousFidelity.get(nodeId);
+    if (!prevFidelity || prevFidelity === newFidelity) return newFidelity;
+
+    const goingDown =
+      FIDELITY_ORDER.indexOf(newFidelity) > FIDELITY_ORDER.indexOf(prevFidelity);
+
+    if (goingDown) {
+      const resistThreshold =
+        getThresholdForLevel(prevFidelity, thresholds) * (1 - hysteresis);
+      return effectiveActivation > resistThreshold ? prevFidelity : newFidelity;
+    }
+
+    const resistThreshold =
+      getThresholdForLevel(newFidelity, thresholds) * (1 + hysteresis);
+    return effectiveActivation < resistThreshold ? prevFidelity : newFidelity;
   }
 
   private renderContent(data: EpisodicData, fidelity: FidelityLevel): string {

@@ -37,6 +37,7 @@ const NODE_TYPES: readonly NodeType[] = [
   "filler",
   "episode",
   "meta",
+  "fact",
 ] as const;
 
 function projectIdFromDir(dir: string): string {
@@ -259,6 +260,95 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
             output: `Marked ${pinned} episodic node(s) as pinned (requested tags: ${tags.join(", ")}).`,
             metadata: { pinned, requested: tags },
           };
+        },
+      }),
+
+      neural_expand: tool({
+        description: "Expand elided/compressed conversation content back to full text. Use tag numbers from §N§ identifiers.",
+        args: {
+          tags: z.string().min(1).describe("Tag numbers to expand (e.g. '3-5', '1,2,9')."),
+        },
+        async execute(args) {
+          const tagNumbers = parseTagRanges(args.tags);
+          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
+          const results: string[] = [];
+
+          for (const node of episodes) {
+            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined);
+            const tag = ep && typeof ep.tag === "number" ? ep.tag : undefined;
+            if (tag !== undefined && tagNumbers.includes(tag)) {
+              const fidelity = ep?.fidelity as Record<string, string> | undefined;
+              const fullText = fidelity?.f0 ?? node.content;
+              results.push(`§${tag}§ [${ep?.role ?? "?"}]\n${fullText}`);
+            }
+          }
+
+          if (results.length === 0) {
+            return { title: "No matches", output: `No episodic nodes found for tags: ${tagNumbers.join(", ")}` };
+          }
+          return {
+            title: `Expanded ${results.length} message(s)`,
+            output: results.join("\n\n---\n\n"),
+            metadata: { expanded: results.length, tags: tagNumbers },
+          };
+        },
+      }),
+
+      neural_note: tool({
+        description:
+          "Save or manage durable notes/facts that persist across conversation and survive compression. Facts are automatically surfaced in context when relevant concepts activate.",
+        args: {
+          action: z.enum(["write", "read", "dismiss"]).optional().describe("Operation: write (default), read, or dismiss."),
+          content: z.string().optional().describe("Note text (required for write)."),
+          scope: z.enum(["session", "project", "global"]).optional().describe("Scope: session (default), project, or global."),
+          noteId: z.string().optional().describe("Note ID (required for dismiss)."),
+        },
+        async execute(args) {
+          const action = args.action ?? "write";
+
+          if (action === "write") {
+            if (!args.content) return { title: "Error", output: "Content is required for write." };
+            const factData = {
+              scope: args.scope ?? "session",
+              activationFloor: 0.5,
+              ready: true,
+            };
+            const node = await engine.remember(args.content, "fact", {
+              importance: 0.9,
+              metadata: { factData, sourceSession: sessionId },
+            });
+            return {
+              title: "Note saved",
+              output: `Saved note ${node.id} (scope=${factData.scope}).`,
+              metadata: { noteId: node.id, scope: factData.scope },
+            };
+          }
+
+          if (action === "read") {
+            const facts = await storage.queryNodes({ type: "fact" });
+            const relevant = facts.filter((f) => {
+              const fd = f.metadata?.factData as Record<string, unknown> | undefined;
+              if (!fd) return false;
+              if (fd.scope === "session") return f.sourceSession === sessionId;
+              return true;
+            });
+            if (relevant.length === 0) return { title: "No notes", output: "No saved notes found." };
+            const list = relevant
+              .map((f, i) => {
+                const fd = f.metadata?.factData as Record<string, unknown> | undefined;
+                return `${i + 1}. [${fd?.scope ?? "?"}] id=${f.id}\n   ${f.content}`;
+              })
+              .join("\n\n");
+            return { title: `${relevant.length} note(s)`, output: list };
+          }
+
+          if (action === "dismiss") {
+            if (!args.noteId) return { title: "Error", output: "noteId is required for dismiss." };
+            await storage.deleteNode(args.noteId);
+            return { title: "Note dismissed", output: `Deleted note ${args.noteId}.` };
+          }
+
+          return { title: "Error", output: `Unknown action: ${action}` };
         },
       }),
     },
