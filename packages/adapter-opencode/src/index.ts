@@ -1,9 +1,32 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { NeuralContextEngine } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+
+interface PluginConfig {
+  injectSystemPrompt?: boolean;
+}
+
+function loadConfig(directory: string): PluginConfig {
+  const candidates = [
+    join(directory, ".opencode", "neural-context.json"),
+    join(directory, "neural-context.json"),
+  ];
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      try {
+        return JSON.parse(readFileSync(path, "utf-8")) as PluginConfig;
+      } catch {
+        return {};
+      }
+    }
+  }
+  return {};
+}
 
 const NODE_TYPES: readonly NodeType[] = [
   "concept",
@@ -34,6 +57,7 @@ function formatNode(n: MemoryNode): string {
 
 const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
   const projectId = projectIdFromDir(directory);
+  const pluginConfig = loadConfig(directory);
   const storage = new SqliteStorageProvider();
   const engine = new NeuralContextEngine();
 
@@ -150,21 +174,23 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
       }),
     },
 
-    "experimental.chat.system.transform": async (_input, output) => {
-      try {
-        const recent = output.system[output.system.length - 1];
-        if (!recent || typeof recent !== "string") return;
-        const results = await engine.recall(recent, { maxResults: 5 });
-        if (results.length === 0) return;
-        const injected = [
-          "## Relevant memories from neural context engine",
-          ...results.map((r) => `- [${r.node.type}] ${r.node.content}`),
-        ].join("\n");
-        output.system.push(injected);
-      } catch (err) {
-        console.error("[ai-agent-local-memory] system.transform failed:", err);
-      }
-    },
+    "experimental.chat.system.transform": pluginConfig.injectSystemPrompt === false
+      ? undefined
+      : async (_input, output) => {
+          try {
+            const recent = output.system[output.system.length - 1];
+            if (!recent || typeof recent !== "string") return;
+            const results = await engine.recall(recent, { maxResults: 5 });
+            if (results.length === 0) return;
+            const injected = [
+              "## Relevant memories from neural context engine",
+              ...results.map((r) => `- [${r.node.type}] ${r.node.content}`),
+            ].join("\n");
+            output.system.push(injected);
+          } catch (err) {
+            console.error("[ai-agent-local-memory] system.transform failed:", err);
+          }
+        },
   };
 };
 
