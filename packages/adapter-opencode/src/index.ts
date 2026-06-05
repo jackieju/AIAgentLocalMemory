@@ -11,6 +11,7 @@ interface PluginConfig {
   injectSystemPrompt?: boolean;
   contextWindowTokens?: number;
   budgetRatio?: number;
+  coexistWithMagicContext?: boolean;
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -28,6 +29,28 @@ function loadConfig(directory: string): PluginConfig {
     }
   }
   return {};
+}
+
+function detectMagicContext(directory: string): boolean {
+  const opencodePaths = [
+    join(directory, "opencode.json"),
+    join(directory, "opencode.jsonc"),
+    join(directory, ".opencode", "opencode.json"),
+    join(directory, ".opencode", "opencode.jsonc"),
+  ];
+  for (const p of opencodePaths) {
+    if (existsSync(p)) {
+      try {
+        const raw = readFileSync(p, "utf-8").replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+        if (raw.includes("@cortexkit/opencode-magic-context") || raw.includes("magic-context")) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
 }
 
 const NODE_TYPES: readonly NodeType[] = [
@@ -85,6 +108,11 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
     return {} as Hooks;
   }
 
+  const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
+  if (magicContextPresent) {
+    console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
+  }
+
   const renderConfig: ContextRenderConfig = {
     contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
     budgetRatio: pluginConfig.budgetRatio ?? 0.6,
@@ -138,7 +166,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
 
       neural_recall: tool({
         description:
-          "Recall memories related to a query using spreading activation across the neural graph.",
+          "Find memories by ASSOCIATION — follows neural connections to discover related concepts you didn't explicitly search for. Unlike keyword/vector search, this traverses a graph of concepts via spreading activation: starting from your query, it finds directly related ideas, then ideas related to THOSE, revealing non-obvious connections. Use when you need 'what else relates to X?' or 'what context surrounds Y?'",
         args: {
           query: z.string().min(1).describe("Natural language query."),
           maxResults: z.number().int().positive().max(100).optional().describe("Max results (default 10)."),
@@ -353,7 +381,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
       }),
     },
 
-    "experimental.chat.messages.transform": async (input, output) => {
+    "experimental.chat.messages.transform": magicContextPresent
+      ? undefined
+      : async (input, output) => {
       try {
         const messages = input.messages ?? [];
         const seeds: Array<{nodeId: string; baseScore: number}> = [];
@@ -413,23 +443,39 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
       }
     },
 
-    "experimental.chat.system.transform": pluginConfig.injectSystemPrompt === false
-      ? undefined
-      : async (_input, output) => {
-          try {
-            const recent = output.system[output.system.length - 1];
-            if (!recent || typeof recent !== "string") return;
-            const results = await engine.recall(recent, { maxResults: 5 });
-            if (results.length === 0) return;
-            const injected = [
-              "## Relevant memories from neural context engine",
-              ...results.map((r) => `- [${r.node.type}] ${r.node.content}`),
-            ].join("\n");
-            output.system.push(injected);
-          } catch (err) {
-            console.error("[ai-agent-local-memory] system.transform failed:", err);
+    "experimental.chat.system.transform": async (_input, output) => {
+      try {
+        const usageGuide = [
+          "",
+          "## Neural Associative Memory",
+          "You have access to a neural associative memory system that finds related concepts by graph traversal, not just keyword match.",
+          "- `neural_recall` — Find memories by ASSOCIATION. Discovers related concepts via spreading activation across a neural graph. Better than keyword search for 'what else relates to X?'",
+          "- `neural_remember` — Store important concepts, decisions, or facts for later associative recall.",
+          "- `neural_note` — Save durable facts/notes (session/project/global scope) that survive compression.",
+          "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
+          "- `neural_pin` — Pin tagged content to always show at full fidelity.",
+          "- `neural_expand` — Expand compressed/elided content back to full text.",
+        ].join("\n");
+
+        if (magicContextPresent || pluginConfig.injectSystemPrompt === false) {
+          output.system.push(usageGuide);
+          return;
+        }
+
+        const recent = output.system[output.system.length - 1];
+        if (recent && typeof recent === "string") {
+          const results = await engine.recall(recent, { maxResults: 5 });
+          if (results.length > 0) {
+            const memories = results.map((r) => `- [${r.node.type}] ${r.node.content}`).join("\n");
+            output.system.push(`## Relevant memories from neural context\n${memories}`);
           }
-        },
+        }
+
+        output.system.push(usageGuide);
+      } catch (err) {
+        console.error("[ai-agent-local-memory] system.transform failed:", err);
+      }
+    },
   };
 };
 

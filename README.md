@@ -96,27 +96,58 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
 
 ```json
 {
-  "injectSystemPrompt": true
+  "injectSystemPrompt": true,
+  "contextWindowTokens": 128000,
+  "budgetRatio": 0.6
 }
 ```
 
 | Option | Default | Description |
 |---|---|---|
 | `injectSystemPrompt` | `true` | Inject relevant memories into the system prompt each turn |
+| `contextWindowTokens` | `128000` | Context window size in tokens for budget calculation |
+| `budgetRatio` | `0.6` | Fraction of context window allocated to history |
+| `coexistWithMagicContext` | auto-detected | Force coexistence mode on/off |
+
+### Tools Provided
+
+| Tool | Description |
+|---|---|
+| `neural_remember` | Store a memory node (concept, assertion, definition, etc.) |
+| `neural_recall` | Find memories by ASSOCIATION via graph traversal + spreading activation |
+| `neural_forget` | Remove a memory node by ID |
+| `neural_note` | Save durable facts/notes (session/project/global scope) |
+| `neural_reduce` | Drop tagged content (suppress from rendering) |
+| `neural_pin` | Pin content to always show at full fidelity |
+| `neural_expand` | Expand compressed/elided content back to full text |
+| `neural_status` | View engine stats and working memory |
 
 ## Using alongside magic-context
 
-This plugin can coexist with magic-context. They use separate storage, separate tool names, and separate data models. The only overlap is the `experimental.chat.system.transform` hook — both plugins inject context into the system prompt.
+**Automatic coexistence detection**: When this plugin detects magic-context in your `opencode.json`, it automatically enters coexistence mode:
 
-If you use both simultaneously and want to avoid double context injection (which wastes context window budget), disable this plugin's injection:
+- `messages.transform` is **disabled** (magic-context handles context compression)
+- Memory content injection is **disabled** (avoids double injection)
+- Tool usage guide is **still injected** (so the agent knows neural_* tools exist)
+- All `neural_*` tools remain **fully functional** for associative memory
 
+In this mode, magic-context handles the "context window management" while AIAgentLocalMemory provides "associative memory" — a complementary relationship.
+
+### When to use standalone (without magic-context)
+
+Replace magic-context entirely in `opencode.json`:
 ```json
 {
-  "injectSystemPrompt": false
+  "plugin": ["@ai-agent-local-memory/adapter-opencode"],
+  "compaction": { "auto": false, "prune": false }
 }
 ```
 
-With injection disabled, the `neural_recall` tool still works — the agent can explicitly query the neural memory when needed, rather than having it auto-injected every turn.
+In standalone mode, this plugin handles:
+- Conversation history compression (activation-based fidelity rendering)
+- Cross-session memory (neural graph with Hebbian learning)
+- Session facts and notes
+- Full context window management
 
 ## Development
 
