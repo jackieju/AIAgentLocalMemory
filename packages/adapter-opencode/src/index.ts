@@ -3,12 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine } from "@ai-agent-local-memory/core";
-import type { NodeType, RecallResult, MemoryNode } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory } from "@ai-agent-local-memory/core";
+import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
 
 interface PluginConfig {
   injectSystemPrompt?: boolean;
+  contextWindowTokens?: number;
+  budgetRatio?: number;
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -55,6 +57,20 @@ function formatNode(n: MemoryNode): string {
   return `id=${n.id} type=${n.type} importance=${n.importance.toFixed(2)} strength=${n.strength.toFixed(2)} accesses=${n.accessCount}\n${n.content}`;
 }
 
+function parseTagRanges(input: string): number[] {
+  const tags: number[] = [];
+  for (const part of input.split(",")) {
+    const trimmed = part.trim();
+    if (trimmed.includes("-")) {
+      const [start, end] = trimmed.split("-").map(Number);
+      for (let i = start; i <= end; i++) tags.push(i);
+    } else {
+      tags.push(Number(trimmed));
+    }
+  }
+  return tags.filter((n) => !isNaN(n) && n > 0);
+}
+
 const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
   const projectId = projectIdFromDir(directory);
   const pluginConfig = loadConfig(directory);
@@ -67,6 +83,18 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
     console.error("[ai-agent-local-memory] init failed:", err);
     return {} as Hooks;
   }
+
+  const renderConfig: ContextRenderConfig = {
+    contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
+    budgetRatio: pluginConfig.budgetRatio ?? 0.6,
+  };
+
+  const graph = new NeuralGraph(storage);
+  const workingMemory = new WorkingMemory();
+  const renderer = new ContextRenderer(graph, workingMemory, storage, renderConfig);
+
+  let turnCounter = 0;
+  const sessionId = projectId;
 
   const z = tool.schema;
 
@@ -172,6 +200,127 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
           };
         },
       }),
+
+      neural_reduce: tool({
+        description:
+          "Drop tagged content you no longer need. Use §N§ identifiers visible in conversation. Accepts ranges: '3-5', '1,2,9', '1-5,8'.",
+        args: {
+          drop: z.string().min(1).describe("Tag IDs to suppress, supports ranges."),
+        },
+        async execute(args) {
+          const tags = parseTagRanges(args.drop);
+          const episodes = await storage.queryNodes({ type: "episode", sourceSession: projectId });
+          let suppressed = 0;
+          for (const node of episodes) {
+            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;
+            const tag = ep && typeof ep.tag === "number" ? (ep.tag as number) : undefined;
+            if (tag !== undefined && tags.includes(tag)) {
+              await storage.updateNode(node.id, {
+                metadata: {
+                  ...node.metadata,
+                  episodicData: { ...ep, suppressed: true },
+                },
+              });
+              suppressed++;
+            }
+          }
+          return {
+            title: `Suppressed ${suppressed} tag${suppressed === 1 ? "" : "s"}`,
+            output: `Marked ${suppressed} episodic node(s) as suppressed (requested tags: ${tags.join(", ")}).`,
+            metadata: { suppressed, requested: tags },
+          };
+        },
+      }),
+
+      neural_pin: tool({
+        description: "Pin tagged content to always show at full fidelity. Use §N§ identifiers.",
+        args: {
+          tags: z.string().min(1).describe("Tag IDs to pin, supports ranges."),
+        },
+        async execute(args) {
+          const tags = parseTagRanges(args.tags);
+          const episodes = await storage.queryNodes({ type: "episode", sourceSession: projectId });
+          let pinned = 0;
+          for (const node of episodes) {
+            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;
+            const tag = ep && typeof ep.tag === "number" ? (ep.tag as number) : undefined;
+            if (tag !== undefined && tags.includes(tag)) {
+              await storage.updateNode(node.id, {
+                metadata: {
+                  ...node.metadata,
+                  episodicData: { ...ep, pinned: true },
+                },
+              });
+              pinned++;
+            }
+          }
+          return {
+            title: `Pinned ${pinned} tag${pinned === 1 ? "" : "s"}`,
+            output: `Marked ${pinned} episodic node(s) as pinned (requested tags: ${tags.join(", ")}).`,
+            metadata: { pinned, requested: tags },
+          };
+        },
+      }),
+    },
+
+    "experimental.chat.messages.transform": async (input, output) => {
+      try {
+        const messages = input.messages ?? [];
+        const seeds: Array<{nodeId: string; baseScore: number}> = [];
+
+        for (const msg of messages) {
+          if (typeof msg.content !== "string") continue;
+          const role = msg.role as "user" | "assistant" | "system" | "tool";
+          if (role !== "user" && role !== "assistant") continue;
+
+          const existingNodes = await storage.queryNodes({
+            type: "episode",
+            sourceSession: sessionId,
+          });
+
+          const alreadyStored = existingNodes.some(
+            (n) => n.content === msg.content && (n.metadata?.episodicData as Record<string, unknown>)?.role === role,
+          );
+
+          if (!alreadyStored) {
+            turnCounter++;
+            const episodicData: EpisodicData = {
+              role,
+              tag: turnCounter,
+              fidelity: { f0: msg.content },
+              turnIndex: turnCounter,
+            };
+            await engine.remember(msg.content, "episode", {
+              importance: role === "user" ? 0.6 : 0.5,
+              metadata: { episodicData },
+            });
+          }
+        }
+
+        const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+        if (lastUserMsg && typeof lastUserMsg.content === "string") {
+          const tokens = lastUserMsg.content.toLowerCase().split(/\s+/).filter(Boolean);
+          const matchingNodes = await storage.search(tokens.slice(0, 5).join(" "), 5);
+          for (const node of matchingNodes) {
+            if (node.type === "concept" || node.type === "assertion") {
+              seeds.push({ nodeId: node.id, baseScore: 0.5 });
+            }
+          }
+        }
+
+        const renderResult = await renderer.render(sessionId, seeds);
+
+        output.messages = renderResult.messages.map((rm) => ({
+          role: rm.role,
+          content: rm.content,
+        }));
+
+        if (renderResult.systemInjection) {
+          output.system = [renderResult.systemInjection];
+        }
+      } catch (err) {
+        console.error("[ai-agent-local-memory] messages.transform failed:", err);
+      }
     },
 
     "experimental.chat.system.transform": pluginConfig.injectSystemPrompt === false

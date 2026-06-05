@@ -4,8 +4,9 @@ export type NodeType =
   | "assertion"    // Composite: multiple concepts forming a claim
   | "definition"   // Definition-style description
   | "filler"       // Low-priority context/filler words
-  | "episode"      // Reference to full conversation text
-  | "meta";        // Hub node: consolidated summary of related nodes
+  | "episode"      // Single message in conversation history
+  | "meta"         // Hub node: consolidated summary of related nodes
+  | "fact";        // Durable session/project fact (survives compression)
 
 export interface MemoryNode {
   id: string;
@@ -200,4 +201,53 @@ export interface EngineStats {
   edgeCount: number;
   workingMemorySize: number;
   nodesByType: Record<NodeType, number>;
+}
+
+export type FidelityLevel = "f0" | "f1" | "f2" | "f3" | "f4";
+
+export interface FidelityPayloads {
+  f0: string;    // Full verbatim text
+  f1?: string;   // Paragraph summary (~200 tokens)
+  f2?: string;   // One-sentence gist (~30 tokens)
+  f3?: string;   // Title only (~8 tokens)
+}
+
+export interface EpisodicData {
+  role: "user" | "assistant" | "system" | "tool";
+  tag: number;
+  fidelity: FidelityPayloads;
+  suppressed?: boolean;
+  pinned?: boolean;
+  turnIndex: number;
+}
+
+export interface FactData {
+  scope: "session" | "project" | "global";
+  surfaceCondition?: string;
+  activationFloor: number;
+  ready?: boolean;
+}
+
+export interface ContextRenderConfig {
+  contextWindowTokens: number;
+  budgetRatio?: number;           // Fraction of window for history, default: 0.6
+  systemPromptTokens?: number;    // Tokens reserved for system prompt, default: 2000
+  reserveTokens?: number;         // Tokens reserved for response, default: 4000
+  recentFullTextTurns?: number;   // Override: force this many turns to f0 (auto-calculated if omitted)
+  hysteresisThreshold?: number;   // Activation change % to trigger fidelity shift, default: 0.2
+}
+
+export interface RenderedMessage {
+  tag: number;
+  role: "user" | "assistant" | "system" | "tool";
+  content: string;
+  fidelityLevel: FidelityLevel;
+}
+
+export interface RenderResult {
+  messages: RenderedMessage[];
+  systemInjection: string;
+  totalTokens: number;
+  budgetUsed: number;
+  budgetAvailable: number;
 }

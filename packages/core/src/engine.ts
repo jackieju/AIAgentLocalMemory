@@ -38,6 +38,7 @@ const IMPORTANCE: Record<NodeType, number> = {
   episode: 0.5,
   filler: 0.2,
   meta: 0.9,
+  fact: 0.9,
 };
 
 const HUB_EDGE_THRESHOLD = 6;
@@ -301,6 +302,7 @@ export class NeuralContextEngine implements INeuralContextEngine {
       filler: 0,
       episode: 0,
       meta: 0,
+      fact: 0,
     };
     for (const node of allNodes) nodesByType[node.type]++;
 
