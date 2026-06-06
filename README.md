@@ -73,13 +73,43 @@ LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01
 
 ### Install
 
-Add to `opencode.json`:
+#### Option A: Local install (from source)
 
+Clone and build:
+```bash
+git clone https://github.com/jackieju/AIAgentLocalMemory.git
+cd AIAgentLocalMemory
+bun install
+```
+
+Build a self-contained bundle and install to OpenCode's global plugins directory:
+```bash
+cd packages/adapter-opencode
+bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin
+mkdir -p ~/.config/opencode/plugins
+cp dist/index.js ~/.config/opencode/plugins/ai-agent-local-memory.js
+```
+
+That's it. Restart OpenCode — the plugin is loaded automatically from the `plugins/` directory.
+
+#### Option B: npm install (when published)
+
+Add to `opencode.json`:
 ```json
 {
   "plugin": ["@ai-agent-local-memory/adapter-opencode"]
 }
 ```
+
+### Per-project control
+
+The plugin is installed globally but you can control behavior per-project:
+
+| Scenario | How |
+|---|---|
+| **All projects**: use alongside magic-context (default) | No config needed — auto-detected |
+| **This project**: AIAgentLocalMemory fully takes over | Create `neural-context.json` in project root with `{"coexistWithMagicContext": false}` and remove magic-context from project-level opencode.json |
+| **This project**: disable AIAgentLocalMemory | Add a project-level `opencode.json` that doesn't load the plugin |
 
 ### Tools Provided
 
