@@ -95,7 +95,7 @@ function parseTagRanges(input: string): number[] {
   return tags.filter((n) => !isNaN(n) && n > 0);
 }
 
-const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
+const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const sessionId = projectIdFromDir(directory);
   const pluginConfig = loadConfig(directory);
   const storage = new SqliteStorageProvider();
@@ -317,6 +317,78 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
             title: `Expanded ${results.length} message(s)`,
             output: results.join("\n\n---\n\n"),
             metadata: { expanded: results.length, tags: tagNumbers },
+          };
+        },
+      }),
+
+      neural_import_history: tool({
+        description:
+          "Import conversation history from past OpenCode sessions into the neural memory graph. Processes messages, extracts entities, and builds associative edges. Use this to bootstrap the memory graph with existing knowledge.",
+        args: {
+          limit: z.number().int().positive().optional().describe("Max number of sessions to import (default: all)."),
+          since: z.string().optional().describe("Only import sessions created after this date (ISO format, e.g. '2025-01-01')."),
+        },
+        async execute(args) {
+          if (!client) {
+            return { title: "Error", output: "OpenCode client not available." };
+          }
+
+          const sessionsResult = await client.session.list();
+          if (!sessionsResult.data) {
+            return { title: "Error", output: "Failed to list sessions." };
+          }
+          let sessions = sessionsResult.data;
+
+          if (args.since) {
+            const sinceMs = new Date(args.since).getTime();
+            sessions = sessions.filter((s) => s.time.created >= sinceMs / 1000);
+          }
+
+          if (args.limit) {
+            sessions = sessions.slice(0, args.limit);
+          }
+
+          let totalNodes = 0;
+          let totalEdges = 0;
+          let processed = 0;
+
+          for (const session of sessions) {
+            try {
+              const msgsResult = await client.session.messages({ path: { id: session.id } });
+              if (!msgsResult.data) continue;
+
+              const messages = msgsResult.data.flatMap((msg) => {
+                const role = msg.info.role;
+                if (role !== "user" && role !== "assistant") return [];
+                return msg.parts
+                  .filter((p) => p.type === "text" && (p as { text?: string }).text)
+                  .map((p) => ({
+                    role: role as "user" | "assistant",
+                    content: (p as { text: string }).text,
+                    timestamp: msg.info.time?.created ? msg.info.time.created * 1000 : undefined,
+                  }));
+              });
+
+              if (messages.length === 0) continue;
+
+              await engine.ingest({
+                id: session.id,
+                messages,
+              });
+
+              processed++;
+              const stats = await engine.getStats();
+              totalNodes = stats.nodeCount;
+              totalEdges = stats.edgeCount;
+            } catch {
+              continue;
+            }
+          }
+
+          return {
+            title: `Imported ${processed} session(s)`,
+            output: `Processed ${processed}/${sessions.length} sessions.\nGraph now has ${totalNodes} nodes and ${totalEdges} edges.`,
+            metadata: { processed, totalSessions: sessions.length, totalNodes, totalEdges },
           };
         },
       }),
