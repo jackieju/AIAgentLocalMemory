@@ -187,6 +187,16 @@ bun run --filter='*' build
 bun run --filter='*' test
 ```
 
+## Development Session
+
+The original design session for this project is in OpenCode. To resume:
+
+```bash
+opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
+```
+
+Note: This session was started in `/Users/I027910/Projects/HanziZombieDefense` directory.
+
 ## License
 
 MIT
