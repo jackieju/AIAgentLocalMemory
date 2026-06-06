@@ -1,4 +1,5 @@
 import type { MemoryNode, Synapse, StorageProvider } from "./interfaces.ts";
+import { RecallIterator, type RecallIteratorOptions } from "./recall-iterator.ts";
 
 export interface ActivationResult {
   nodeId: string;
@@ -144,5 +145,12 @@ export class NeuralGraph {
     }
     results.sort((a, b) => b.score - a.score);
     return results;
+  }
+
+  createRecallIterator(
+    seeds: ActivationSeed[],
+    options?: RecallIteratorOptions,
+  ): RecallIterator {
+    return new RecallIterator(this.storage, seeds, options);
   }
 }

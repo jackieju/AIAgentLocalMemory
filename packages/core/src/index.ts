@@ -6,3 +6,7 @@ export { SessionAbstractor } from "./abstraction.ts";
 export { NeuralContextEngine } from "./engine.ts";
 export { ContextRenderer } from "./context-renderer.ts";
 export { Compactor } from "./compactor.ts";
+export { Deduplicator } from "./deduplicator.ts";
+export { CrossSessionLinker } from "./cross-session-linker.ts";
+export { LightweightLinker } from "./lightweight-linker.ts";
+export { HierarchicalGraph } from "./hierarchical-graph.ts";

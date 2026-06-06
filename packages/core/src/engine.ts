@@ -14,6 +14,7 @@ import { NeuralGraph } from "./graph.ts";
 import { HebbianLearning } from "./hebbian.ts";
 import { WorkingMemory } from "./working-memory.ts";
 import { SessionAbstractor } from "./abstraction.ts";
+import type { RecallIterator } from "./recall-iterator.ts";
 
 interface ResolvedConfig {
   storage: StorageProvider;
@@ -233,8 +234,43 @@ export class NeuralContextEngine implements INeuralContextEngine {
     return results;
   }
 
-  async associate(nodeId: string, hops?: number): Promise<RecallResult[]> {
-    const seed = await this.config.storage.getNode(nodeId);
+  async recallIterative(query: string): Promise<RecallIterator> {
+    const queryTokens = [...tokenize(query)];
+    if (queryTokens.length === 0) {
+      return this.graph.createRecallIterator([]);
+    }
+
+    let seedNodes: MemoryNode[] = [];
+
+    const wmIds = this.workingMemory.getAll();
+    if (wmIds.length > 0) {
+      const wmNodes = await this.config.storage.getNodesByIds(wmIds);
+      const matches: MemoryNode[] = [];
+      for (const node of wmNodes) {
+        const nodeTokens = tokenize(node.content);
+        let hits = 0;
+        for (const t of queryTokens) if (nodeTokens.has(t)) hits++;
+        if (hits / queryTokens.length >= KEYWORD_MATCH_RATIO) matches.push(node);
+      }
+      seedNodes = matches;
+    }
+
+    if (seedNodes.length === 0) {
+      seedNodes = await this.config.storage.search(query, SEARCH_FALLBACK_LIMIT);
+    }
+
+    const seeds = seedNodes.map((n) => ({
+      nodeId: n.id,
+      baseScore: n.importance,
+    }));
+
+    return this.graph.createRecallIterator(seeds, {
+      hopDecay: this.config.hopDecay,
+      threshold: this.config.activationThreshold,
+    });
+  }
+
+  async associate(nodeId: string, hops?: number): Promise<RecallResult[]> {    const seed = await this.config.storage.getNode(nodeId);
     if (!seed) return [];
 
     const activations = await this.graph.spreadingActivation(
