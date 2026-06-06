@@ -150,26 +150,24 @@ export interface NodeFilter {
 
 export interface EngineConfig {
   storage: StorageProvider;
-  llm?: LLMProvider;         // Optional — engine works without LLM (no abstraction)
+  llm?: LLMProvider;
 
-  // Hebbian learning parameters
-  learningRate?: number;     // η, default: 0.1
-  decayRate?: number;        // λ, per-day decay constant, default: 0.005
-  pruneThreshold?: number;   // Min weight before prune eligible, default: 0.01
-  pruneMinAge?: number;      // Min age (days) before prune eligible, default: 30
-  pruneMinCoactivations?: number; // Min coactivation count to protect from pruning, default: 3
+  learningRate?: number;
+  decayRate?: number;
+  pruneThreshold?: number;
+  pruneMinAge?: number;
+  pruneMinCoactivations?: number;
 
-  // Spreading activation parameters
-  maxHops?: number;          // Default: 3
-  hopDecay?: number;         // Default: 0.5
-  activationThreshold?: number; // Default: 0.08
-  maxEdgesPerNode?: number;  // Bound on edges per node, default: 8
+  maxHops?: number;
+  hopDecay?: number;
+  activationThreshold?: number;
+  maxEdgesPerNode?: number;
 
-  // Working memory
-  workingMemorySize?: number; // Default: 1000
+  workingMemorySize?: number;
 
-  // Project identity
   projectId?: string;
+
+  episodesDir?: string;
 }
 
 

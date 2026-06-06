@@ -15,6 +15,8 @@ import { HebbianLearning } from "./hebbian.ts";
 import { WorkingMemory } from "./working-memory.ts";
 import { SessionAbstractor } from "./abstraction.ts";
 import type { RecallIterator } from "./recall-iterator.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 interface ResolvedConfig {
   storage: StorageProvider;
@@ -30,6 +32,7 @@ interface ResolvedConfig {
   maxEdgesPerNode: number;
   workingMemorySize: number;
   projectId: string;
+  episodesDir?: string;
 }
 
 const IMPORTANCE: Record<NodeType, number> = {
@@ -82,9 +85,14 @@ export class NeuralContextEngine implements INeuralContextEngine {
       maxEdgesPerNode: config.maxEdgesPerNode ?? 8,
       workingMemorySize: config.workingMemorySize ?? 1000,
       projectId: config.projectId ?? "default",
+      episodesDir: config.episodesDir,
     };
 
     await this.config.storage.open(this.config.projectId);
+
+    if (this.config.episodesDir) {
+      mkdirSync(this.config.episodesDir, { recursive: true });
+    }
 
     this.graph = new NeuralGraph(this.config.storage, this.config.maxEdgesPerNode);
     this.hebbian = new HebbianLearning({
@@ -105,6 +113,14 @@ export class NeuralContextEngine implements INeuralContextEngine {
 
   async ingest(session: SessionData): Promise<void> {
     const now = Date.now();
+
+    if (this.config.episodesDir) {
+      const filename = `${session.id || crypto.randomUUID()}.json`;
+      const filepath = join(this.config.episodesDir, filename);
+      try {
+        writeFileSync(filepath, JSON.stringify(session, null, 2));
+      } catch { /* best-effort, don't block ingest */ }
+    }
 
     if (!this.abstractor) {
       const text = session.messages

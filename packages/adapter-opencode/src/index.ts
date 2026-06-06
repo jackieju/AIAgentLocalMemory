@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
@@ -100,9 +101,11 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const pluginConfig = loadConfig(directory);
   const storage = new SqliteStorageProvider();
   const engine = new NeuralContextEngine();
+  const dataBase = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  const episodesDir = join(dataBase, 'ai-agent-local-memory', 'episodes');
 
   try {
-    await engine.init({ storage, projectId: "global" });
+    await engine.init({ storage, projectId: "global", episodesDir });
   } catch (err) {
     console.error("[ai-agent-local-memory] init failed:", err);
     return {} as Hooks;
