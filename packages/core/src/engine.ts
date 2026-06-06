@@ -43,9 +43,12 @@ const IMPORTANCE: Record<NodeType, number> = {
 };
 
 const HUB_EDGE_THRESHOLD = 6;
-const KEYWORD_MATCH_RATIO = 0.5;
-const SEARCH_FALLBACK_LIMIT = 10;
+const KEYWORD_MATCH_RATIO = 0.25;
+const SEARCH_FALLBACK_LIMIT = 30;
 const DEFAULT_MAX_RESULTS = 20;
+const FTS_WEIGHT = 0.75;
+const ACTIVATION_WEIGHT = 0.25;
+const SPREAD_SEED_LIMIT = 5;
 
 function tokenize(text: string): Set<string> {
   return new Set(
@@ -167,49 +170,106 @@ export class NeuralContextEngine implements INeuralContextEngine {
     const queryTokens = [...tokenize(query)];
     if (queryTokens.length === 0) return [];
 
-    let seedNodes: MemoryNode[] = [];
+    const ftsScores = new Map<string, number>();
+    let ftsNodes: MemoryNode[] = [];
 
+    if (this.config.storage.searchWithScores) {
+      const scored = await this.config.storage.searchWithScores(query, SEARCH_FALLBACK_LIMIT);
+      for (const { node, score } of scored) {
+        ftsScores.set(node.id, score);
+        ftsNodes.push(node);
+      }
+    } else {
+      ftsNodes = await this.config.storage.search(query, SEARCH_FALLBACK_LIMIT);
+      for (let i = 0; i < ftsNodes.length; i++) {
+        ftsScores.set(ftsNodes[i].id, 1 - i / Math.max(ftsNodes.length, 1));
+      }
+    }
+
+    const queryTokensLower = new Set(queryTokens.map((t) => t.toLowerCase()));
+    for (const node of ftsNodes) {
+      const nodeTokens = tokenize(node.content);
+      let overlap = 0;
+      for (const t of queryTokensLower) if (nodeTokens.has(t)) overlap++;
+      const overlapScore = overlap / queryTokensLower.size;
+      const existingFts = ftsScores.get(node.id) ?? 0;
+      ftsScores.set(node.id, existingFts * 0.6 + overlapScore * 0.4);
+    }
+
+    const wmBonus = new Map<string, number>();
     const wmIds = this.workingMemory.getAll();
     if (wmIds.length > 0) {
       const wmNodes = await this.config.storage.getNodesByIds(wmIds);
-      const matches: MemoryNode[] = [];
       for (const node of wmNodes) {
         const nodeTokens = tokenize(node.content);
         let hits = 0;
         for (const t of queryTokens) if (nodeTokens.has(t)) hits++;
-        if (hits / queryTokens.length >= KEYWORD_MATCH_RATIO) matches.push(node);
+        if (hits / queryTokens.length >= KEYWORD_MATCH_RATIO) {
+          wmBonus.set(node.id, 0.15);
+          if (!ftsScores.has(node.id)) {
+            ftsScores.set(node.id, 0.3);
+            ftsNodes.push(node);
+          }
+        }
       }
-      seedNodes = matches;
     }
 
-    if (seedNodes.length === 0) {
-      seedNodes = await this.config.storage.search(query, SEARCH_FALLBACK_LIMIT);
-    }
+    if (ftsNodes.length === 0) return [];
 
-    if (seedNodes.length === 0) return [];
-
-    const seeds = seedNodes.map((n) => ({
+    const spreadSeeds = ftsNodes.slice(0, SPREAD_SEED_LIMIT).map((n) => ({
       nodeId: n.id,
-      baseScore: n.importance,
+      baseScore: ftsScores.get(n.id) ?? 0.5,
     }));
 
-    const activations = await this.graph.spreadingActivation(seeds, {
-      maxHops: options.maxHops ?? this.config.maxHops,
-      hopDecay: options.decayFactor ?? this.config.hopDecay,
-      threshold: options.threshold ?? this.config.activationThreshold,
+    const maxHops = options.maxHops ?? 2;
+    const hopDecay = options.decayFactor ?? 0.3;
+    const threshold = options.threshold ?? 0.05;
+
+    const activations = await this.graph.spreadingActivation(spreadSeeds, {
+      maxHops,
+      hopDecay,
+      threshold,
     });
 
-    if (activations.length === 0) return [];
+    const activationScores = new Map<string, number>();
+    let maxActivation = 0;
+    for (const a of activations) {
+      if (a.score > maxActivation) maxActivation = a.score;
+    }
+    for (const a of activations) {
+      activationScores.set(a.nodeId, maxActivation > 0 ? a.score / maxActivation : 0);
+    }
 
-    const ids = activations.map((a) => a.nodeId);
-    const fetched = await this.config.storage.getNodesByIds(ids);
+    const allNodeIds = new Set<string>();
+    for (const id of ftsScores.keys()) allNodeIds.add(id);
+    for (const a of activations) allNodeIds.add(a.nodeId);
+
+    const hybridScores = new Map<string, number>();
+    for (const id of allNodeIds) {
+      const fts = ftsScores.get(id) ?? 0;
+      const act = activationScores.get(id) ?? 0;
+      const wm = wmBonus.get(id) ?? 0;
+      hybridScores.set(id, FTS_WEIGHT * fts + ACTIVATION_WEIGHT * act + wm);
+    }
+
+    const sortedIds = [...hybridScores.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, options.maxResults ?? DEFAULT_MAX_RESULTS)
+      .map(([id]) => id);
+
+    const fetched = await this.config.storage.getNodesByIds(sortedIds);
     const nodeMap = new Map(fetched.map((n) => [n.id, n]));
 
     let results: RecallResult[] = [];
-    for (const a of activations) {
-      const node = nodeMap.get(a.nodeId);
+    for (const id of sortedIds) {
+      const node = nodeMap.get(id);
       if (!node) continue;
-      results.push({ node, score: a.score, path: a.path });
+      const activation = activations.find((a) => a.nodeId === id);
+      results.push({
+        node,
+        score: hybridScores.get(id) ?? 0,
+        path: activation?.path,
+      });
     }
 
     if (options.includeTypes) {
@@ -221,7 +281,6 @@ export class NeuralContextEngine implements INeuralContextEngine {
       results = results.filter((r) => !exc.has(r.node.type));
     }
 
-    results.sort((a, b) => b.score - a.score);
     results = results.slice(0, options.maxResults ?? DEFAULT_MAX_RESULTS);
 
     const resultIds = results.map((r) => r.node.id);
@@ -242,31 +301,21 @@ export class NeuralContextEngine implements INeuralContextEngine {
 
     let seedNodes: MemoryNode[] = [];
 
-    const wmIds = this.workingMemory.getAll();
-    if (wmIds.length > 0) {
-      const wmNodes = await this.config.storage.getNodesByIds(wmIds);
-      const matches: MemoryNode[] = [];
-      for (const node of wmNodes) {
-        const nodeTokens = tokenize(node.content);
-        let hits = 0;
-        for (const t of queryTokens) if (nodeTokens.has(t)) hits++;
-        if (hits / queryTokens.length >= KEYWORD_MATCH_RATIO) matches.push(node);
-      }
-      seedNodes = matches;
-    }
-
-    if (seedNodes.length === 0) {
+    if (this.config.storage.searchWithScores) {
+      const scored = await this.config.storage.searchWithScores(query, SEARCH_FALLBACK_LIMIT);
+      seedNodes = scored.map((s) => s.node);
+    } else {
       seedNodes = await this.config.storage.search(query, SEARCH_FALLBACK_LIMIT);
     }
 
-    const seeds = seedNodes.map((n) => ({
+    const seeds = seedNodes.slice(0, SPREAD_SEED_LIMIT).map((n) => ({
       nodeId: n.id,
       baseScore: n.importance,
     }));
 
     return this.graph.createRecallIterator(seeds, {
-      hopDecay: this.config.hopDecay,
-      threshold: this.config.activationThreshold,
+      hopDecay: 0.3,
+      threshold: 0.05,
     });
   }
 

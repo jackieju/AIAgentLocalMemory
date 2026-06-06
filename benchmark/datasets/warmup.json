@@ -1,0 +1,10 @@
+{
+  "queries": [
+    "What is our database?",
+    "Tell me about PostgreSQL setup",
+    "How do we handle caching?",
+    "What queue system do we use?",
+    "Describe the event pipeline",
+    "How does the frontend communicate with backend?"
+  ]
+}

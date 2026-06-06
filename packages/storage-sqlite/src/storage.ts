@@ -62,6 +62,9 @@ const EDGE_UPDATE_COLUMNS: Record<string, string> = {
 };
 
 function getStoragePath(_projectId?: string): string {
+  if (process.env.AI_AGENT_LOCAL_MEMORY_DIR) {
+    return join(process.env.AI_AGENT_LOCAL_MEMORY_DIR, 'graph.db');
+  }
   const base = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
   return join(base, 'ai-agent-local-memory', 'graph.db');
 }
@@ -99,12 +102,13 @@ function escapeFtsQuery(query: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .map((word) => `"${word}"`)
-    .join(' ');
+    .join(' OR ');
 }
 
 export class SqliteStorageProvider implements StorageProvider {
   private db: Database | null = null;
   private statements: Statement[] = [];
+  private customPath?: string;
 
   private stmtGetNode!: Statement;
   private stmtPutNode!: Statement;
@@ -119,10 +123,14 @@ export class SqliteStorageProvider implements StorageProvider {
   private stmtAllEdges!: Statement;
   private stmtNodeCount!: Statement;
 
+  constructor(options?: { storagePath?: string }) {
+    this.customPath = options?.storagePath;
+  }
+
   async open(projectId: string): Promise<void> {
     if (this.db) return;
 
-    const path = getStoragePath(projectId);
+    const path = this.customPath || getStoragePath(projectId);
     mkdirSync(dirname(path), { recursive: true });
 
     const db = new Database(path, { create: true });
@@ -413,6 +421,32 @@ export class SqliteStorageProvider implements StorageProvider {
     if (!ftsQuery) return [];
     const rows = this.stmtSearch.all(ftsQuery, limit) as NodeRow[];
     return rows.map(rowToNode);
+  }
+
+  async searchWithScores(query: string, limit = 10): Promise<Array<{ node: MemoryNode; score: number }>> {
+    const ftsQuery = escapeFtsQuery(query);
+    if (!ftsQuery) return [];
+    const db = this.db!;
+    const rows = db.prepare(`
+      SELECT ${NODE_COLS_PREFIXED}, rank
+      FROM nodes_fts f
+      JOIN nodes n ON n.rowid = f.rowid
+      WHERE nodes_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    `).all(ftsQuery, limit) as (NodeRow & { rank: number })[];
+
+    if (rows.length === 0) return [];
+
+    const ranks = rows.map(r => r.rank);
+    const bestRank = Math.min(...ranks);
+    const worstRank = Math.max(...ranks);
+    const range = worstRank - bestRank || 1;
+
+    return rows.map((row) => ({
+      node: rowToNode(row),
+      score: 1 - (row.rank - bestRank) / range,
+    }));
   }
 
   async getAllNodes(): Promise<MemoryNode[]> {

@@ -1,0 +1,305 @@
+{
+  "project": "Helios — fictional SaaS analytics platform",
+  "facts": [
+    {
+      "id": "f1",
+      "category": "tech-stack",
+      "content": "The Helios web frontend is built with React 18 and TypeScript 5.4, using Vite as the build tool. We chose Vite over Webpack in March 2024 because cold start times dropped from 18 seconds to under 2 seconds, which materially improved developer happiness on the dashboard team."
+    },
+    {
+      "id": "f2",
+      "category": "tech-stack",
+      "content": "All UI styling in the Helios dashboard is implemented with Tailwind CSS v3.4 and a small set of custom design tokens stored in tokens.css. We deliberately avoid CSS-in-JS libraries like styled-components because they hurt React Server Components support and increase bundle size."
+    },
+    {
+      "id": "f3",
+      "category": "tech-stack",
+      "content": "The primary data store for Helios is PostgreSQL 16 running on AWS RDS in us-east-1. We use PostgreSQL for transactional data, customer accounts, billing records, and analytics aggregates. Connection pooling is handled by PgBouncer in transaction mode with a max pool size of 200."
+    },
+    {
+      "id": "f4",
+      "category": "tech-stack",
+      "content": "Helios uses Redis 7.2 as its cache and short-lived queue. Redis hosts session tokens, rate-limit counters, and the BullMQ job queues used by the worker fleet. We standardized on Redis after evaluating Memcached and Valkey in Q1 2025."
+    },
+    {
+      "id": "f5",
+      "category": "tech-stack",
+      "content": "The Helios API gateway is implemented in Node.js 20 with Fastify 4. Fastify was chosen over Express because of its built-in schema validation via JSON Schema and significantly higher requests-per-second under our typical workload of 12k RPS per instance."
+    },
+    {
+      "id": "f6",
+      "category": "tech-stack",
+      "content": "Internal RPC between Helios services uses tRPC v11 over HTTP/2, with end-to-end TypeScript types shared via the @helios/contracts workspace package. The tRPC router lives in services/api-gateway/src/router.ts."
+    },
+    {
+      "id": "f7",
+      "category": "tech-stack",
+      "content": "Background job processing in Helios is handled by BullMQ workers running on Kubernetes. Each worker pod consumes from a single named queue (email, billing, ingest, export) and reports metrics to Prometheus via the BullMQ metrics exporter."
+    },
+    {
+      "id": "f8",
+      "category": "tech-stack",
+      "content": "Helios uses ClickHouse 24.3 as the analytics warehouse for time-series event data. Events flow from Kafka into ClickHouse via the Kafka table engine, then materialized views aggregate them into per-minute, per-hour, and per-day rollups."
+    },
+    {
+      "id": "f9",
+      "category": "tech-stack",
+      "content": "Helios uses Apache Kafka 3.7 hosted on Confluent Cloud as the event backbone. There are 12 production topics, the largest being events.user.action with roughly 8 billion messages per day at peak."
+    },
+    {
+      "id": "f10",
+      "category": "tech-stack",
+      "content": "The Helios mobile apps are written in React Native 0.74 with Expo SDK 51. We share roughly 70% of business logic with the web client through the @helios/core workspace package, which contains all data fetching hooks and domain models."
+    },
+    {
+      "id": "f11",
+      "category": "architecture",
+      "content": "Helios follows a microservices architecture with six core services: api-gateway, auth, billing, ingest, analytics, and notifications. Each service has its own PostgreSQL schema and is deployed as an independent Kubernetes Deployment with its own HPA."
+    },
+    {
+      "id": "f12",
+      "category": "architecture",
+      "content": "Helios uses an event-driven architecture for cross-service communication. Domain events such as UserSignedUp, InvoicePaid, and ExportCompleted are published to Kafka and consumed by interested services. We avoid synchronous service-to-service HTTP calls except via the api-gateway."
+    },
+    {
+      "id": "f13",
+      "category": "architecture",
+      "content": "The Helios billing service implements CQRS. Write commands (CreateSubscription, CancelSubscription) go through a command handler that produces domain events, while read queries hit a denormalized read model in PostgreSQL refreshed by event handlers."
+    },
+    {
+      "id": "f14",
+      "category": "architecture",
+      "content": "All Helios services run in a single EKS cluster (helios-prod-eks) split across three availability zones in us-east-1. We use Karpenter for node autoscaling and Istio as the service mesh, with mTLS enforced between every pod."
+    },
+    {
+      "id": "f15",
+      "category": "architecture",
+      "content": "Helios uses a multi-tenant data model with a tenant_id column on every business table and Postgres row-level security policies that filter by the current_setting('app.tenant_id'). The tenant_id is set per request from the JWT claim."
+    },
+    {
+      "id": "f16",
+      "category": "architecture",
+      "content": "The Helios API exposes both a public REST API (versioned under /v1, /v2) for external customers and an internal tRPC API used by our own frontend. Both share the same business logic in the services/*/src/domain layer."
+    },
+    {
+      "id": "f17",
+      "category": "architecture",
+      "content": "Helios uses CDN-based static asset hosting via CloudFront with an S3 origin bucket helios-assets-prod. The frontend is built into immutable hashed bundles and uploaded by the deploy pipeline; index.html references the latest hash."
+    },
+    {
+      "id": "f18",
+      "category": "architecture",
+      "content": "Helios authentication is handled by a dedicated auth service that issues 15-minute access tokens and 30-day refresh tokens, both signed RS256 with keys rotated every 90 days. Refresh tokens are stored hashed in the auth_tokens Postgres table and indexed by token family for revocation."
+    },
+    {
+      "id": "f19",
+      "category": "architecture",
+      "content": "Real-time features in the Helios dashboard, such as live event tail and collaborative cursors, use WebSockets terminated at the realtime-gateway service. The gateway uses Redis Streams to fan out messages to subscribed connections."
+    },
+    {
+      "id": "f20",
+      "category": "architecture",
+      "content": "Helios stores customer-uploaded files in an S3 bucket helios-uploads with object lock enabled in compliance mode for 7 years. Uploads use presigned PUT URLs generated by the api-gateway, never proxied through our servers."
+    },
+    {
+      "id": "f21",
+      "category": "conventions",
+      "content": "All Helios TypeScript source files use 2-space indentation, double quotes for strings, and the canonical import order: node built-ins, then external packages, then @helios/* workspace packages, then relative imports. This is enforced by ESLint with simple-import-sort."
+    },
+    {
+      "id": "f22",
+      "category": "conventions",
+      "content": "Helios uses strict TypeScript configuration: strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes, and noImplicitOverride are all enabled. We never use any in production code; if needed, we use unknown and narrow."
+    },
+    {
+      "id": "f23",
+      "category": "conventions",
+      "content": "Variable and function names in Helios code use camelCase, types and classes use PascalCase, and constants use SCREAMING_SNAKE_CASE only when they represent compile-time literals. Database columns use snake_case and are mapped to camelCase in the domain layer."
+    },
+    {
+      "id": "f24",
+      "category": "conventions",
+      "content": "Helios uses Vitest for unit tests and Playwright for end-to-end tests. The convention is to colocate unit tests next to the source file (foo.ts and foo.test.ts) and to keep e2e tests in apps/dashboard/e2e/. Snapshot tests are forbidden because they tend to be rubber-stamped during review."
+    },
+    {
+      "id": "f25",
+      "category": "conventions",
+      "content": "Every pull request in the helios monorepo requires at least one approving review from a CODEOWNERS reviewer and a green CI run before merging. We use squash-merge exclusively, and the PR title becomes the squashed commit message and must follow Conventional Commits."
+    },
+    {
+      "id": "f26",
+      "category": "conventions",
+      "content": "Helios uses Conventional Commits for PR titles: feat, fix, chore, docs, refactor, perf, test, build, ci, revert. The release-please bot generates release notes and bumps versions based on the commit history of the main branch."
+    },
+    {
+      "id": "f27",
+      "category": "conventions",
+      "content": "The Helios code review checklist requires reviewers to verify: tests cover new behavior, no schema changes without a migration, no console.log in production code, public APIs have JSDoc, and any feature flag has an expiration date in the description."
+    },
+    {
+      "id": "f28",
+      "category": "conventions",
+      "content": "Helios uses feature flags via Unleash. Every new flag must have an owner, an expected lifetime in days, and a tracked deletion ticket. The ops bot opens a stale-flag PR if a flag has been at 100% rollout for more than 30 days."
+    },
+    {
+      "id": "f29",
+      "category": "conventions",
+      "content": "Database migrations in Helios are written in pure SQL using sqlx-style files numbered by timestamp (e.g. 20250403094501_add_invoice_index.sql). Migrations are applied at startup of each service and recorded in a schema_migrations table."
+    },
+    {
+      "id": "f30",
+      "category": "conventions",
+      "content": "Helios secrets management standardizes on AWS Secrets Manager. No secret may be committed to git, including in .env files. The local-dev experience uses doppler-cli to pull secrets at runtime so developers never see raw values."
+    },
+    {
+      "id": "f31",
+      "category": "decisions",
+      "content": "On 2024-09-12, Helios decided to migrate away from MongoDB to PostgreSQL for the customer accounts service. The decision was driven by frequent cross-document consistency bugs in the billing flow and the operational cost of running a separate replica set."
+    },
+    {
+      "id": "f32",
+      "category": "decisions",
+      "content": "On 2025-01-22, after a three-week spike, Helios chose ClickHouse over Apache Druid for the analytics warehouse. ClickHouse's lower operational complexity and better SQL compatibility outweighed Druid's slightly faster point lookups for our workload."
+    },
+    {
+      "id": "f33",
+      "category": "decisions",
+      "content": "Helios deprecated the legacy /api/legacy/* endpoints on 2025-04-01 and removed them on 2025-07-01. The migration guide is in docs/migrations/legacy-to-v2.md, and a Cloudflare Worker now returns HTTP 410 Gone with a JSON body pointing customers to the v2 endpoint."
+    },
+    {
+      "id": "f34",
+      "category": "decisions",
+      "content": "On 2025-03-04, Helios replaced custom Webpack-based microfrontend module federation with a single Vite-built dashboard SPA. Module federation had caused intermittent runtime errors on stale tabs and increased bundle size by roughly 22%."
+    },
+    {
+      "id": "f35",
+      "category": "decisions",
+      "content": "On 2024-11-18, Helios standardized on Zod for runtime schema validation across both backend and frontend. Yup and io-ts were considered but Zod's TypeScript-first design and active maintenance made it the natural choice; all new code must use Zod."
+    },
+    {
+      "id": "f36",
+      "category": "decisions",
+      "content": "Helios runs production exclusively on AWS. A 2025-02 board-level decision rejected a multi-cloud strategy because the operational complexity outweighed the resilience gains given AWS's multi-AZ capabilities. GCP is allowed only for offline data science via BigQuery."
+    },
+    {
+      "id": "f37",
+      "category": "bugs",
+      "content": "Bug HEL-2031, fixed on 2025-05-08: the billing-service incorrectly charged proration twice when a customer downgraded mid-cycle and then upgraded within the same billing period. Root cause was that the upgrade handler did not check the pending_proration_credits row before issuing a new credit."
+    },
+    {
+      "id": "f38",
+      "category": "bugs",
+      "content": "Bug HEL-1872, fixed on 2025-02-14: the realtime-gateway leaked Redis pub/sub subscribers when a WebSocket disconnected before the initial subscribe ack. Memory grew at ~300 MB/day per pod until OOMKilled. Fix: subscribe in a try/finally that always unsubscribes on socket close."
+    },
+    {
+      "id": "f39",
+      "category": "bugs",
+      "content": "Bug HEL-2104, fixed on 2025-06-02: the export job worker generated CSV files with BOM header even when the customer requested utf-8 without BOM, breaking ingestion in some downstream systems. The fix replaced the writeFileSync({encoding: 'utf8bom'}) with explicit Buffer concatenation."
+    },
+    {
+      "id": "f40",
+      "category": "bugs",
+      "content": "Bug HEL-1990, fixed on 2025-04-22: PostgreSQL connection storms during deploys caused 502s for ~30 seconds. Root cause: PgBouncer reset all connections on a config reload triggered by Helm's annotation churn. Fix: switched PgBouncer to use a SIGHUP-only reload and pinned its config via a separate ConfigMap with no upstream churn."
+    },
+    {
+      "id": "f41",
+      "category": "bugs",
+      "content": "Bug HEL-2210, fixed on 2025-07-15: the dashboard date-range picker silently truncated ranges longer than 92 days because of an off-by-one comparison in the Zod schema. The fix changed maxDays > 92 to maxDays >= 92 and added a regression Playwright test."
+    },
+    {
+      "id": "f42",
+      "category": "bugs",
+      "content": "Bug HEL-1751, fixed on 2024-12-09: the auth service issued refresh tokens with a 30-day expiry but the rotation logic compared against 30 days minus 1 hour, causing premature 401s on long-lived sessions. Fix: removed the spurious offset and added a unit test covering the boundary."
+    },
+    {
+      "id": "f43",
+      "category": "bugs",
+      "content": "Bug HEL-2300, opened on 2025-08-19 and still under investigation: a small subset of customers see duplicate webhook deliveries from the notifications service when the consumer pod is preempted by a Karpenter consolidation event. We suspect a race in the at-least-once delivery commit logic."
+    },
+    {
+      "id": "f44",
+      "category": "bugs",
+      "content": "Bug HEL-1655, fixed on 2024-10-30: ClickHouse materialized view refresh fell behind by hours during traffic spikes because the projection was rebuilt on every insert. Fix: switched to AggregatingMergeTree with state functions, dropping background merge cost by approximately 85%."
+    },
+    {
+      "id": "f45",
+      "category": "bugs",
+      "content": "Bug HEL-1922, fixed on 2025-03-11: the OAuth callback page rendered the user's email in HTML without escaping, allowing a stored XSS via crafted email aliases. Fix: switched the rendering path to a React component that automatically escapes text."
+    },
+    {
+      "id": "f46",
+      "category": "config",
+      "content": "The Helios api-gateway listens on port 8080 inside its container and is exposed via Istio Gateway on 443 with a TLS certificate provisioned through cert-manager and Let's Encrypt. Health checks hit /healthz and readiness checks hit /readyz."
+    },
+    {
+      "id": "f47",
+      "category": "config",
+      "content": "The Helios billing service connects to Stripe using restricted-access API keys stored as the BILLING_STRIPE_SECRET_KEY environment variable, fetched from AWS Secrets Manager at boot via the External Secrets Operator. There are separate keys for prod, staging, and ci."
+    },
+    {
+      "id": "f48",
+      "category": "config",
+      "content": "Helios environment configuration is split into three environments: dev, staging, and prod. Each environment maps to a Kubernetes namespace and a separate AWS account (helios-dev, helios-staging, helios-prod) joined to the helios-org AWS Organization."
+    },
+    {
+      "id": "f49",
+      "category": "config",
+      "content": "The Helios dashboard reads its public configuration from the VITE_API_BASE_URL, VITE_SENTRY_DSN, and VITE_FLAGS_HOST environment variables, all baked into the build at deploy time. Runtime configuration is fetched from /__config on first load."
+    },
+    {
+      "id": "f50",
+      "category": "config",
+      "content": "Helios uses ArgoCD for GitOps continuous delivery. Each service has an Application manifest in the helios-deploy repository under apps/<env>/<service>.yaml that points at a Helm chart in the helios-charts repo. Sync waves order migrations before app rollout."
+    },
+    {
+      "id": "f51",
+      "category": "config",
+      "content": "Helios observability uses OpenTelemetry SDKs in every service exporting to Grafana Tempo (traces), Loki (logs), and Mimir (metrics). The OTel collector runs as a DaemonSet, and every service auto-injects the OTEL_EXPORTER_OTLP_ENDPOINT via a mutating webhook."
+    },
+    {
+      "id": "f52",
+      "category": "config",
+      "content": "Production database backups for Helios PostgreSQL are taken every 15 minutes via pgBackRest into an S3 bucket helios-pgbackrest with versioning and a 35-day retention policy. PITR is tested quarterly via the disaster-recovery drill in docs/runbooks/dr-drill.md."
+    },
+    {
+      "id": "f53",
+      "category": "config",
+      "content": "Helios CI runs on GitHub Actions using self-hosted ARM runners on EKS. The default workflow lints, type-checks, runs unit tests with --coverage, and builds Docker images that are pushed to ECR with the commit SHA as the tag and an additional :latest tag only on main."
+    },
+    {
+      "id": "f54",
+      "category": "config",
+      "content": "All Helios container images are scanned for vulnerabilities by Trivy in CI and again at admission time by Kyverno. The policy blocks deployment if any CRITICAL CVE is present that has a known fix; HIGH CVEs are allowed with a documented exception."
+    },
+    {
+      "id": "f55",
+      "category": "config",
+      "content": "Rate limiting in Helios is enforced at two layers: Cloudflare at the edge for unauthenticated abuse, and the api-gateway via a Redis-backed token bucket keyed by tenant_id and route. The default tenant limit is 600 requests per minute per route, configurable per plan."
+    },
+    {
+      "id": "f56",
+      "category": "config",
+      "content": "Helios uses Sentry for error tracking. The DSN is environment-specific and the release version is set to the Git short SHA at build time. Source maps are uploaded to Sentry from CI but kept private; the public bundles include only commented-out sourceMappingURL pointers to internal storage."
+    },
+    {
+      "id": "f57",
+      "category": "config",
+      "content": "Helios feature flag evaluation is cached in-process for 30 seconds using lru-cache to avoid hammering the Unleash edge. A background timer refreshes flags every 15 seconds, and reads block at most 250 ms before falling back to the last-known-good snapshot stored on disk."
+    },
+    {
+      "id": "f58",
+      "category": "config",
+      "content": "Helios staging is a continuous-deployment environment: every merge to main is deployed automatically by ArgoCD within five minutes. Production deploys are gated behind a manual approval and the freeze calendar in docs/runbooks/release-freeze.md."
+    },
+    {
+      "id": "f59",
+      "category": "config",
+      "content": "Helios on-call uses PagerDuty with a primary, secondary, and engineering-manager escalation chain. The on-call schedule is one week long, rotating Mondays at 10:00 UTC, and the runbook for each alert is linked from the alert annotation runbook_url."
+    },
+    {
+      "id": "f60",
+      "category": "config",
+      "content": "Helios localhost development uses Tilt with a docker-compose-style helios.tiltfile that boots Postgres, Redis, Kafka, and the six core services in dependency order. The seed-dev-data target loads a representative tenant with synthetic events for dashboard work."
+    }
+  ]
+}

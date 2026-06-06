@@ -1,0 +1,298 @@
+{
+  "queries": [
+    {
+      "id": "q1",
+      "category": "exact",
+      "query": "What database do we use for Helios?",
+      "expected_fact_ids": ["f3"],
+      "description": "Direct recall of primary database choice"
+    },
+    {
+      "id": "q2",
+      "category": "exact",
+      "query": "Which version of React are we on?",
+      "expected_fact_ids": ["f1"],
+      "description": "Direct recall of React version"
+    },
+    {
+      "id": "q3",
+      "category": "exact",
+      "query": "What CSS framework does the dashboard use?",
+      "expected_fact_ids": ["f2"],
+      "description": "Direct recall of styling solution"
+    },
+    {
+      "id": "q4",
+      "category": "exact",
+      "query": "What port does the api-gateway listen on?",
+      "expected_fact_ids": ["f46"],
+      "description": "Direct recall of api-gateway port"
+    },
+    {
+      "id": "q5",
+      "category": "exact",
+      "query": "Which queue library do background workers use?",
+      "expected_fact_ids": ["f7"],
+      "description": "Direct recall of BullMQ"
+    },
+    {
+      "id": "q6",
+      "category": "exact",
+      "query": "What is the Conventional Commits policy?",
+      "expected_fact_ids": ["f26", "f25"],
+      "description": "Direct recall of commit policy"
+    },
+    {
+      "id": "q7",
+      "category": "exact",
+      "query": "Which feature flag system do we use?",
+      "expected_fact_ids": ["f28", "f57"],
+      "description": "Direct recall of Unleash"
+    },
+    {
+      "id": "q8",
+      "category": "exact",
+      "query": "How are PostgreSQL backups taken?",
+      "expected_fact_ids": ["f52"],
+      "description": "Direct recall of pgBackRest backups"
+    },
+    {
+      "id": "q9",
+      "category": "exact",
+      "query": "What is the on-call rotation policy?",
+      "expected_fact_ids": ["f59"],
+      "description": "Direct recall of PagerDuty rotation"
+    },
+    {
+      "id": "q10",
+      "category": "exact",
+      "query": "Which CI provider do we use?",
+      "expected_fact_ids": ["f53"],
+      "description": "Direct recall of GitHub Actions"
+    },
+    {
+      "id": "q11",
+      "category": "exact",
+      "query": "Which validator library is standard for runtime schemas?",
+      "expected_fact_ids": ["f35"],
+      "description": "Direct recall of Zod"
+    },
+    {
+      "id": "q12",
+      "category": "exact",
+      "query": "What service mesh runs in the EKS cluster?",
+      "expected_fact_ids": ["f14"],
+      "description": "Direct recall of Istio"
+    },
+    {
+      "id": "q13",
+      "category": "paraphrase",
+      "query": "Where do we keep transactional records?",
+      "expected_fact_ids": ["f3"],
+      "description": "Paraphrase: data store synonym"
+    },
+    {
+      "id": "q14",
+      "category": "paraphrase",
+      "query": "What technology powers our event streaming pipeline?",
+      "expected_fact_ids": ["f9", "f8"],
+      "description": "Paraphrase: Kafka event backbone"
+    },
+    {
+      "id": "q15",
+      "category": "paraphrase",
+      "query": "How long do logged-in sessions stay valid?",
+      "expected_fact_ids": ["f18", "f42"],
+      "description": "Paraphrase: token expiry semantics"
+    },
+    {
+      "id": "q16",
+      "category": "paraphrase",
+      "query": "How do we keep secrets out of the repo?",
+      "expected_fact_ids": ["f30", "f47"],
+      "description": "Paraphrase: secrets management"
+    },
+    {
+      "id": "q17",
+      "category": "paraphrase",
+      "query": "How do customers upload large files?",
+      "expected_fact_ids": ["f20"],
+      "description": "Paraphrase: presigned S3 uploads"
+    },
+    {
+      "id": "q18",
+      "category": "paraphrase",
+      "query": "How does our deployment system know what to roll out?",
+      "expected_fact_ids": ["f50", "f58"],
+      "description": "Paraphrase: ArgoCD GitOps"
+    },
+    {
+      "id": "q19",
+      "category": "paraphrase",
+      "query": "How do we keep multiple customers' data separated?",
+      "expected_fact_ids": ["f15"],
+      "description": "Paraphrase: multi-tenancy / RLS"
+    },
+    {
+      "id": "q20",
+      "category": "paraphrase",
+      "query": "What stops abusive callers from overloading the API?",
+      "expected_fact_ids": ["f55"],
+      "description": "Paraphrase: rate limiting"
+    },
+    {
+      "id": "q21",
+      "category": "paraphrase",
+      "query": "Which write-heavy storage handles per-event analytics?",
+      "expected_fact_ids": ["f8", "f44"],
+      "description": "Paraphrase: ClickHouse analytics"
+    },
+    {
+      "id": "q22",
+      "category": "paraphrase",
+      "query": "What is our policy on stale flags?",
+      "expected_fact_ids": ["f28"],
+      "description": "Paraphrase: feature flag lifecycle"
+    },
+    {
+      "id": "q23",
+      "category": "paraphrase",
+      "query": "What is the merge strategy for pull requests?",
+      "expected_fact_ids": ["f25"],
+      "description": "Paraphrase: squash merge policy"
+    },
+    {
+      "id": "q24",
+      "category": "paraphrase",
+      "query": "Where do production crash reports go?",
+      "expected_fact_ids": ["f56"],
+      "description": "Paraphrase: Sentry"
+    },
+    {
+      "id": "q25",
+      "category": "associative",
+      "query": "How does the frontend talk to the backend?",
+      "expected_fact_ids": ["f6", "f5", "f16"],
+      "description": "Multi-hop: React → tRPC → Fastify gateway"
+    },
+    {
+      "id": "q26",
+      "category": "associative",
+      "query": "What happens when a customer cancels their subscription?",
+      "expected_fact_ids": ["f13", "f12", "f11"],
+      "description": "Multi-hop: billing CQRS → events → consumers"
+    },
+    {
+      "id": "q27",
+      "category": "associative",
+      "query": "How do we make sure no customer can read another tenant's data?",
+      "expected_fact_ids": ["f15", "f18", "f14"],
+      "description": "Multi-hop: RLS + JWT tenant claim + mTLS"
+    },
+    {
+      "id": "q28",
+      "category": "associative",
+      "query": "Why did we switch off webpack module federation?",
+      "expected_fact_ids": ["f34", "f1"],
+      "description": "Multi-hop: decision + Vite stack"
+    },
+    {
+      "id": "q29",
+      "category": "associative",
+      "query": "What infrastructure does live-tail in the dashboard depend on?",
+      "expected_fact_ids": ["f19", "f4"],
+      "description": "Multi-hop: realtime gateway → Redis Streams"
+    },
+    {
+      "id": "q30",
+      "category": "associative",
+      "query": "Why did we decide to consolidate on a single cloud provider?",
+      "expected_fact_ids": ["f36", "f14", "f48"],
+      "description": "Multi-hop: AWS-only decision + EKS + accounts"
+    },
+    {
+      "id": "q31",
+      "category": "associative",
+      "query": "What in the deploy pipeline could cause connection storms?",
+      "expected_fact_ids": ["f40", "f3", "f50"],
+      "description": "Multi-hop: PgBouncer reload bug + Postgres + ArgoCD"
+    },
+    {
+      "id": "q32",
+      "category": "associative",
+      "query": "How are events from a user click eventually visible in dashboards?",
+      "expected_fact_ids": ["f9", "f8", "f44"],
+      "description": "Multi-hop: Kafka → ClickHouse → MV"
+    },
+    {
+      "id": "q33",
+      "category": "associative",
+      "query": "What stops shipping a vulnerable container to production?",
+      "expected_fact_ids": ["f54", "f50", "f53"],
+      "description": "Multi-hop: Trivy + Kyverno + ArgoCD + CI"
+    },
+    {
+      "id": "q34",
+      "category": "associative",
+      "query": "How does mobile share business logic with web?",
+      "expected_fact_ids": ["f10", "f6"],
+      "description": "Multi-hop: React Native + shared workspace package"
+    },
+    {
+      "id": "q35",
+      "category": "associative",
+      "query": "Why did billing have a double-charge issue and how was it prevented later?",
+      "expected_fact_ids": ["f37", "f13"],
+      "description": "Multi-hop: bug + CQRS architecture"
+    },
+    {
+      "id": "q36",
+      "category": "associative",
+      "query": "How does an alert reach the right engineer with context?",
+      "expected_fact_ids": ["f59", "f51"],
+      "description": "Multi-hop: PagerDuty + observability stack"
+    },
+    {
+      "id": "q37",
+      "category": "topic_return",
+      "query": "What's the connection pool configuration?",
+      "expected_fact_ids": ["f3"],
+      "description": "Topic-return: PostgreSQL (warmed) — PgBouncer pool"
+    },
+    {
+      "id": "q38",
+      "category": "topic_return",
+      "query": "What's the retention window on database snapshots?",
+      "expected_fact_ids": ["f52"],
+      "description": "Topic-return: PostgreSQL (warmed) — pgBackRest retention"
+    },
+    {
+      "id": "q39",
+      "category": "topic_return",
+      "query": "Where do rate-limit counters live?",
+      "expected_fact_ids": ["f4", "f55"],
+      "description": "Topic-return: caching (warmed) — Redis backed token bucket"
+    },
+    {
+      "id": "q40",
+      "category": "topic_return",
+      "query": "How are background jobs split across workers?",
+      "expected_fact_ids": ["f7"],
+      "description": "Topic-return: queue system (warmed) — BullMQ named queues"
+    },
+    {
+      "id": "q41",
+      "category": "topic_return",
+      "query": "What aggregates per-minute event rollups for analytics?",
+      "expected_fact_ids": ["f8", "f9"],
+      "description": "Topic-return: event pipeline (warmed) — Kafka -> ClickHouse MV"
+    },
+    {
+      "id": "q42",
+      "category": "topic_return",
+      "query": "What protocol carries internal service calls between Helios services?",
+      "expected_fact_ids": ["f6", "f5"],
+      "description": "Topic-return: frontend↔backend (warmed) — tRPC over HTTP/2"
+    }
+  ]
+}

@@ -130,6 +130,9 @@ export interface StorageProvider {
   // Full-text search (fallback when not in working memory)
   search(query: string, limit?: number): Promise<MemoryNode[]>;
 
+  // Full-text search with relevance scores (for hybrid scoring)
+  searchWithScores?(query: string, limit?: number): Promise<Array<{ node: MemoryNode; score: number }>>;
+
   // Bulk operations
   getAllNodes(): Promise<MemoryNode[]>;
   getAllEdges(): Promise<Synapse[]>;

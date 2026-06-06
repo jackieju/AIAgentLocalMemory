@@ -1,0 +1,2089 @@
+{
+  "startedAt": "2026-06-06T09:04:50.701Z",
+  "durationMs": 198.858709,
+  "runs": [
+    {
+      "adapterName": "AIAgentLocalMemory",
+      "ingestLatenciesMs": [
+        0.35783300000000295,
+        0.07437499999999986,
+        0.06283300000000125,
+        0.055375000000001506,
+        0.058292000000001565,
+        0.05141700000000071,
+        0.052790999999999144,
+        0.05554100000000162,
+        0.058707999999999316,
+        0.05662500000000037,
+        0.0709169999999979,
+        0.07225000000000037,
+        0.0558329999999998,
+        0.05662500000000037,
+        0.054375000000000284,
+        0.16574999999999918,
+        0.07133400000000023,
+        0.08112500000000011,
+        0.07624999999999815,
+        0.08024999999999949,
+        0.06658299999999784,
+        0.05729200000000034,
+        0.053958000000001505,
+        0.05974999999999753,
+        0.05245800000000145,
+        0.05716600000000227,
+        0.05208299999999966,
+        0.05633399999999966,
+        0.06729199999999835,
+        0.054417000000000826,
+        0.2072080000000014,
+        0.06662500000000193,
+        0.06420800000000071,
+        0.095167,
+        0.06787499999999724,
+        0.0884999999999998,
+        0.0626250000000006,
+        0.06129200000000168,
+        0.05862499999999926,
+        0.06283399999999872,
+        0.06937500000000085,
+        0.06412500000000065,
+        0.0595409999999994,
+        0.05904199999999804,
+        0.05691600000000108,
+        0.057749999999998636,
+        0.14512500000000017,
+        0.05416699999999963,
+        0.05820800000000048,
+        0.053625000000000256,
+        0.07137499999999974,
+        0.06458299999999895,
+        0.058541999999999206,
+        0.05891599999999997,
+        0.058333999999998554,
+        0.059291999999999234,
+        0.06629099999999966,
+        0.06783300000000025,
+        0.061666999999999916,
+        0.061874999999997016
+      ],
+      "queries": [
+        {
+          "queryId": "q1",
+          "category": "exact",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f52",
+            "f23",
+            "f29",
+            "f22",
+            "f14",
+            "f3",
+            "f12",
+            "f1",
+            "f40",
+            "f25"
+          ],
+          "latencyMs": 1.2744580000000099
+        },
+        {
+          "queryId": "q2",
+          "category": "exact",
+          "expectedFactIds": [
+            "f1"
+          ],
+          "returnedIds": [
+            "f10",
+            "f1",
+            "f2",
+            "f26",
+            "f22",
+            "f3",
+            "f43",
+            "f56",
+            "f29",
+            "f12"
+          ],
+          "latencyMs": 0.8743330000000071
+        },
+        {
+          "queryId": "q3",
+          "category": "exact",
+          "expectedFactIds": [
+            "f2"
+          ],
+          "returnedIds": [
+            "f2",
+            "f19",
+            "f49",
+            "f60",
+            "f35",
+            "f21",
+            "f41",
+            "f1",
+            "f24",
+            "f23"
+          ],
+          "latencyMs": 0.8624580000000037
+        },
+        {
+          "queryId": "q4",
+          "category": "exact",
+          "expectedFactIds": [
+            "f46"
+          ],
+          "returnedIds": [
+            "f46",
+            "f6",
+            "f12",
+            "f20",
+            "f1",
+            "f16",
+            "f3",
+            "f11",
+            "f47",
+            "f19"
+          ],
+          "latencyMs": 1.0308750000000089
+        },
+        {
+          "queryId": "q5",
+          "category": "exact",
+          "expectedFactIds": [
+            "f7"
+          ],
+          "returnedIds": [
+            "f7",
+            "f4",
+            "f10",
+            "f1",
+            "f2",
+            "f44",
+            "f57",
+            "f39",
+            "f33",
+            "f22"
+          ],
+          "latencyMs": 0.8537089999999807
+        },
+        {
+          "queryId": "q6",
+          "category": "exact",
+          "expectedFactIds": [
+            "f26",
+            "f25"
+          ],
+          "returnedIds": [
+            "f26",
+            "f25",
+            "f52",
+            "f54",
+            "f15",
+            "f24",
+            "f43",
+            "f55",
+            "f3",
+            "f58"
+          ],
+          "latencyMs": 0.8511670000000038
+        },
+        {
+          "queryId": "q7",
+          "category": "exact",
+          "expectedFactIds": [
+            "f28",
+            "f57"
+          ],
+          "returnedIds": [
+            "f28",
+            "f57",
+            "f27",
+            "f10",
+            "f1",
+            "f22",
+            "f14",
+            "f25",
+            "f3",
+            "f39"
+          ],
+          "latencyMs": 0.8112500000000011
+        },
+        {
+          "queryId": "q8",
+          "category": "exact",
+          "expectedFactIds": [
+            "f52"
+          ],
+          "returnedIds": [
+            "f52",
+            "f40",
+            "f3",
+            "f11",
+            "f13",
+            "f31",
+            "f29",
+            "f54",
+            "f22",
+            "f9"
+          ],
+          "latencyMs": 6.7636249999999905
+        },
+        {
+          "queryId": "q9",
+          "category": "exact",
+          "expectedFactIds": [
+            "f59"
+          ],
+          "returnedIds": [
+            "f59",
+            "f15",
+            "f52",
+            "f54",
+            "f18",
+            "f42",
+            "f44",
+            "f4",
+            "f32",
+            "f30"
+          ],
+          "latencyMs": 1.3710829999999987
+        },
+        {
+          "queryId": "q10",
+          "category": "exact",
+          "expectedFactIds": [
+            "f53"
+          ],
+          "returnedIds": [
+            "f1",
+            "f10",
+            "f25",
+            "f22",
+            "f14",
+            "f3",
+            "f26",
+            "f47",
+            "f54",
+            "f53"
+          ],
+          "latencyMs": 0.9389159999999777
+        },
+        {
+          "queryId": "q11",
+          "category": "exact",
+          "expectedFactIds": [
+            "f35"
+          ],
+          "returnedIds": [
+            "f35",
+            "f1",
+            "f5",
+            "f21",
+            "f30",
+            "f49",
+            "f2",
+            "f3",
+            "f59",
+            "f55"
+          ],
+          "latencyMs": 1.009457999999995
+        },
+        {
+          "queryId": "q12",
+          "category": "exact",
+          "expectedFactIds": [
+            "f14"
+          ],
+          "returnedIds": [
+            "f14",
+            "f53",
+            "f51",
+            "f31",
+            "f52",
+            "f1",
+            "f4",
+            "f33",
+            "f24",
+            "f58"
+          ],
+          "latencyMs": 0.970832999999999
+        },
+        {
+          "queryId": "q13",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f3",
+            "f24",
+            "f22",
+            "f29",
+            "f11",
+            "f13",
+            "f40",
+            "f31",
+            "f14",
+            "f52"
+          ],
+          "latencyMs": 1.0218340000000126
+        },
+        {
+          "queryId": "q14",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f9",
+            "f8"
+          ],
+          "returnedIds": [
+            "f19",
+            "f17",
+            "f13",
+            "f9",
+            "f8",
+            "f12",
+            "f20",
+            "f16",
+            "f32",
+            "f5"
+          ],
+          "latencyMs": 0.7041249999999764
+        },
+        {
+          "queryId": "q15",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f18",
+            "f42"
+          ],
+          "returnedIds": [
+            "f42",
+            "f27",
+            "f4",
+            "f59",
+            "f5",
+            "f35"
+          ],
+          "latencyMs": 0.6659999999999968
+        },
+        {
+          "queryId": "q16",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f30",
+            "f47"
+          ],
+          "returnedIds": [
+            "f30",
+            "f47",
+            "f50",
+            "f10",
+            "f19",
+            "f3",
+            "f2",
+            "f24",
+            "f43",
+            "f56"
+          ],
+          "latencyMs": 0.8953340000000196
+        },
+        {
+          "queryId": "q17",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f20"
+          ],
+          "returnedIds": [
+            "f20",
+            "f39",
+            "f30",
+            "f17",
+            "f56",
+            "f29",
+            "f21",
+            "f16",
+            "f33",
+            "f43"
+          ],
+          "latencyMs": 0.6427500000000066
+        },
+        {
+          "queryId": "q18",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f50",
+            "f58"
+          ],
+          "returnedIds": [
+            "f19",
+            "f56",
+            "f58",
+            "f39",
+            "f11",
+            "f54",
+            "f20",
+            "f16",
+            "f32",
+            "f5"
+          ],
+          "latencyMs": 0.8870420000000081
+        },
+        {
+          "queryId": "q19",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f15"
+          ],
+          "returnedIds": [
+            "f3",
+            "f10",
+            "f31",
+            "f43",
+            "f24",
+            "f2",
+            "f40",
+            "f11",
+            "f13",
+            "f22"
+          ],
+          "latencyMs": 1.046750000000003
+        },
+        {
+          "queryId": "q20",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f55"
+          ],
+          "returnedIds": [
+            "f55",
+            "f49",
+            "f47",
+            "f16",
+            "f7",
+            "f15",
+            "f6",
+            "f5",
+            "f8",
+            "f31"
+          ],
+          "latencyMs": 0.9242499999999723
+        },
+        {
+          "queryId": "q21",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f8",
+            "f44"
+          ],
+          "returnedIds": [
+            "f3",
+            "f13",
+            "f9",
+            "f56",
+            "f8",
+            "f10",
+            "f11",
+            "f1",
+            "f40",
+            "f31"
+          ],
+          "latencyMs": 0.9038339999999891
+        },
+        {
+          "queryId": "q22",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f28"
+          ],
+          "returnedIds": [
+            "f28",
+            "f57",
+            "f34",
+            "f15",
+            "f52",
+            "f49",
+            "f54",
+            "f5",
+            "f32",
+            "f3"
+          ],
+          "latencyMs": 0.8185840000000155
+        },
+        {
+          "queryId": "q23",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f25"
+          ],
+          "returnedIds": [
+            "f25",
+            "f36",
+            "f55",
+            "f58",
+            "f30",
+            "f50",
+            "f15",
+            "f5",
+            "f47",
+            "f60"
+          ],
+          "latencyMs": 0.949374999999975
+        },
+        {
+          "queryId": "q24",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f56"
+          ],
+          "returnedIds": [
+            "f13",
+            "f7",
+            "f22",
+            "f52",
+            "f9",
+            "f3",
+            "f11",
+            "f31",
+            "f58",
+            "f4"
+          ],
+          "latencyMs": 0.8855419999999867
+        },
+        {
+          "queryId": "q25",
+          "category": "associative",
+          "expectedFactIds": [
+            "f6",
+            "f5",
+            "f16"
+          ],
+          "returnedIds": [
+            "f35",
+            "f1",
+            "f17",
+            "f16",
+            "f6",
+            "f24",
+            "f47",
+            "f56",
+            "f19",
+            "f30"
+          ],
+          "latencyMs": 1.5165829999999971
+        },
+        {
+          "queryId": "q26",
+          "category": "associative",
+          "expectedFactIds": [
+            "f13",
+            "f12",
+            "f11"
+          ],
+          "returnedIds": [
+            "f37",
+            "f39",
+            "f43",
+            "f38",
+            "f23",
+            "f31",
+            "f3",
+            "f34",
+            "f20",
+            "f16"
+          ],
+          "latencyMs": 1.187041999999991
+        },
+        {
+          "queryId": "q27",
+          "category": "associative",
+          "expectedFactIds": [
+            "f15",
+            "f18",
+            "f14"
+          ],
+          "returnedIds": [
+            "f3",
+            "f13",
+            "f10",
+            "f27",
+            "f40",
+            "f2",
+            "f31",
+            "f43",
+            "f11",
+            "f30"
+          ],
+          "latencyMs": 1.427665999999988
+        },
+        {
+          "queryId": "q28",
+          "category": "associative",
+          "expectedFactIds": [
+            "f34",
+            "f1"
+          ],
+          "returnedIds": [
+            "f34",
+            "f1",
+            "f41",
+            "f37",
+            "f22",
+            "f44",
+            "f45",
+            "f14",
+            "f12",
+            "f4"
+          ],
+          "latencyMs": 0.872415999999987
+        },
+        {
+          "queryId": "q29",
+          "category": "associative",
+          "expectedFactIds": [
+            "f19",
+            "f4"
+          ],
+          "returnedIds": [
+            "f60",
+            "f19",
+            "f41",
+            "f49",
+            "f1",
+            "f2",
+            "f57",
+            "f43",
+            "f24",
+            "f34"
+          ],
+          "latencyMs": 0.9343340000000069
+        },
+        {
+          "queryId": "q30",
+          "category": "associative",
+          "expectedFactIds": [
+            "f36",
+            "f14",
+            "f48"
+          ],
+          "returnedIds": [
+            "f43",
+            "f14",
+            "f31",
+            "f7",
+            "f37",
+            "f36",
+            "f34",
+            "f3",
+            "f1",
+            "f9"
+          ],
+          "latencyMs": 1.2959999999999923
+        },
+        {
+          "queryId": "q31",
+          "category": "associative",
+          "expectedFactIds": [
+            "f40",
+            "f3",
+            "f50"
+          ],
+          "returnedIds": [
+            "f40",
+            "f17",
+            "f3",
+            "f50",
+            "f58",
+            "f19",
+            "f31",
+            "f37",
+            "f34",
+            "f11"
+          ],
+          "latencyMs": 1.056083000000001
+        },
+        {
+          "queryId": "q32",
+          "category": "associative",
+          "expectedFactIds": [
+            "f9",
+            "f8",
+            "f44"
+          ],
+          "returnedIds": [
+            "f9",
+            "f60",
+            "f8",
+            "f43",
+            "f45",
+            "f12",
+            "f13",
+            "f19",
+            "f49",
+            "f29"
+          ],
+          "latencyMs": 0.928750000000008
+        },
+        {
+          "queryId": "q33",
+          "category": "associative",
+          "expectedFactIds": [
+            "f54",
+            "f50",
+            "f53"
+          ],
+          "returnedIds": [
+            "f54",
+            "f58",
+            "f27",
+            "f46",
+            "f36",
+            "f52",
+            "f10",
+            "f48",
+            "f31",
+            "f57"
+          ],
+          "latencyMs": 0.829416000000009
+        },
+        {
+          "queryId": "q34",
+          "category": "associative",
+          "expectedFactIds": [
+            "f10",
+            "f6"
+          ],
+          "returnedIds": [
+            "f10",
+            "f16",
+            "f1",
+            "f15",
+            "f42",
+            "f6",
+            "f21",
+            "f43",
+            "f5",
+            "f22"
+          ],
+          "latencyMs": 1.592458999999991
+        },
+        {
+          "queryId": "q35",
+          "category": "associative",
+          "expectedFactIds": [
+            "f37",
+            "f13"
+          ],
+          "returnedIds": [
+            "f37",
+            "f31",
+            "f11",
+            "f5",
+            "f3",
+            "f27",
+            "f13",
+            "f40",
+            "f28",
+            "f47"
+          ],
+          "latencyMs": 1.883375000000001
+        },
+        {
+          "queryId": "q36",
+          "category": "associative",
+          "expectedFactIds": [
+            "f59",
+            "f51"
+          ],
+          "returnedIds": [
+            "f59",
+            "f20",
+            "f17",
+            "f53",
+            "f52",
+            "f8",
+            "f28",
+            "f11",
+            "f16",
+            "f27"
+          ],
+          "latencyMs": 1.1452500000000043
+        },
+        {
+          "queryId": "q37",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f3",
+            "f40",
+            "f49",
+            "f48",
+            "f35",
+            "f32",
+            "f36",
+            "f46",
+            "f22",
+            "f19"
+          ],
+          "latencyMs": 0.8604589999999916
+        },
+        {
+          "queryId": "q38",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f52"
+          ],
+          "returnedIds": [
+            "f52",
+            "f57",
+            "f23",
+            "f1",
+            "f37",
+            "f43",
+            "f40",
+            "f29",
+            "f24",
+            "f32"
+          ],
+          "latencyMs": 0.8575829999999769
+        },
+        {
+          "queryId": "q39",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f4",
+            "f55"
+          ],
+          "returnedIds": [
+            "f4",
+            "f55",
+            "f7",
+            "f19",
+            "f6",
+            "f42"
+          ],
+          "latencyMs": 0.6152500000000032
+        },
+        {
+          "queryId": "q40",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f7"
+          ],
+          "returnedIds": [
+            "f7",
+            "f14",
+            "f4",
+            "f39",
+            "f48",
+            "f35",
+            "f44",
+            "f57",
+            "f29",
+            "f54"
+          ],
+          "latencyMs": 0.7622920000000022
+        },
+        {
+          "queryId": "q41",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f8",
+            "f9"
+          ],
+          "returnedIds": [
+            "f8",
+            "f3",
+            "f55",
+            "f32",
+            "f12",
+            "f9",
+            "f18",
+            "f13",
+            "f11",
+            "f44"
+          ],
+          "latencyMs": 0.9959580000000017
+        },
+        {
+          "queryId": "q42",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f6",
+            "f5"
+          ],
+          "returnedIds": [
+            "f6",
+            "f12",
+            "f14",
+            "f16",
+            "f11",
+            "f59",
+            "f47",
+            "f56",
+            "f51",
+            "f50"
+          ],
+          "latencyMs": 0.943000000000012
+        }
+      ],
+      "stats": {
+        "nodeCount": 60,
+        "edgeCount": 70,
+        "dbSizeBytes": 118784
+      }
+    },
+    {
+      "adapterName": "magic-context (FTS5 baseline)",
+      "ingestLatenciesMs": [
+        0.21699999999998454,
+        0.07662500000000705,
+        0.2429170000000056,
+        0.04820800000001668,
+        0.05770800000001941,
+        0.04970900000000711,
+        0.047334000000006426,
+        0.04466700000000401,
+        0.043250000000000455,
+        0.0498749999999859,
+        0.05383399999999483,
+        0.0730000000000075,
+        0.04954100000000494,
+        0.05283299999999258,
+        0.05895799999998985,
+        0.14562499999999545,
+        0.04383300000000645,
+        0.05945800000000645,
+        0.04595799999998462,
+        0.052666999999985364,
+        0.05000000000001137,
+        0.048292000000003554,
+        0.048208999999985735,
+        0.05154200000001197,
+        0.04574999999999818,
+        0.05104199999999537,
+        0.04566699999998036,
+        0.05087499999999068,
+        0.06920900000000074,
+        0.0469579999999894,
+        0.1661670000000015,
+        0.05329100000000153,
+        0.054917000000017424,
+        0.058166999999997415,
+        0.05679200000000151,
+        0.05662499999999682,
+        0.05970800000000054,
+        0.055208000000021684,
+        0.05520799999999326,
+        0.05725000000001046,
+        0.05500000000000682,
+        0.07054099999999153,
+        0.06200000000001182,
+        0.056250000000005684,
+        0.05633299999999508,
+        0.05508299999999622,
+        0.1441250000000025,
+        0.05516700000001151,
+        0.05258399999999597,
+        0.05212499999998954,
+        0.05741700000001515,
+        0.05487500000000978,
+        0.05633299999999508,
+        0.0539579999999944,
+        0.06287499999999113,
+        0.05637500000000273,
+        0.05979200000001583,
+        0.060625000000015916,
+        0.05629200000001333,
+        0.05704200000002402
+      ],
+      "queries": [
+        {
+          "queryId": "q1",
+          "category": "exact",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f23",
+            "f22",
+            "f52",
+            "f29",
+            "f14",
+            "f3",
+            "f12",
+            "f25",
+            "f10",
+            "f4"
+          ],
+          "latencyMs": 0.6392079999999964
+        },
+        {
+          "queryId": "q2",
+          "category": "exact",
+          "expectedFactIds": [
+            "f1"
+          ],
+          "returnedIds": [
+            "f10",
+            "f1",
+            "f2",
+            "f56",
+            "f22",
+            "f26",
+            "f29",
+            "f3",
+            "f43",
+            "f52"
+          ],
+          "latencyMs": 0.5500000000000114
+        },
+        {
+          "queryId": "q3",
+          "category": "exact",
+          "expectedFactIds": [
+            "f2"
+          ],
+          "returnedIds": [
+            "f2",
+            "f19",
+            "f49",
+            "f60",
+            "f34",
+            "f1",
+            "f41",
+            "f24",
+            "f23",
+            "f22"
+          ],
+          "latencyMs": 0.5519580000000133
+        },
+        {
+          "queryId": "q4",
+          "category": "exact",
+          "expectedFactIds": [
+            "f46"
+          ],
+          "returnedIds": [
+            "f46",
+            "f6",
+            "f11",
+            "f20",
+            "f12",
+            "f5",
+            "f55",
+            "f19",
+            "f16",
+            "f38"
+          ],
+          "latencyMs": 0.5877499999999998
+        },
+        {
+          "queryId": "q5",
+          "category": "exact",
+          "expectedFactIds": [
+            "f7"
+          ],
+          "returnedIds": [
+            "f7",
+            "f4",
+            "f10",
+            "f1",
+            "f44",
+            "f2",
+            "f57",
+            "f39",
+            "f33",
+            "f23"
+          ],
+          "latencyMs": 0.4873749999999859
+        },
+        {
+          "queryId": "q6",
+          "category": "exact",
+          "expectedFactIds": [
+            "f26",
+            "f25"
+          ],
+          "returnedIds": [
+            "f26",
+            "f25",
+            "f54",
+            "f52",
+            "f15",
+            "f24",
+            "f43",
+            "f30",
+            "f53",
+            "f56"
+          ],
+          "latencyMs": 0.47845799999998917
+        },
+        {
+          "queryId": "q7",
+          "category": "exact",
+          "expectedFactIds": [
+            "f28",
+            "f57"
+          ],
+          "returnedIds": [
+            "f28",
+            "f57",
+            "f27",
+            "f10",
+            "f1",
+            "f22",
+            "f39",
+            "f19",
+            "f49",
+            "f14"
+          ],
+          "latencyMs": 0.46504099999998516
+        },
+        {
+          "queryId": "q8",
+          "category": "exact",
+          "expectedFactIds": [
+            "f52"
+          ],
+          "returnedIds": [
+            "f52",
+            "f3",
+            "f13",
+            "f11",
+            "f31",
+            "f40",
+            "f29",
+            "f54",
+            "f22",
+            "f9"
+          ],
+          "latencyMs": 0.26141699999999446
+        },
+        {
+          "queryId": "q9",
+          "category": "exact",
+          "expectedFactIds": [
+            "f59"
+          ],
+          "returnedIds": [
+            "f59",
+            "f42",
+            "f54",
+            "f52",
+            "f15",
+            "f12",
+            "f18",
+            "f3",
+            "f56",
+            "f58"
+          ],
+          "latencyMs": 0.49858299999999645
+        },
+        {
+          "queryId": "q10",
+          "category": "exact",
+          "expectedFactIds": [
+            "f53"
+          ],
+          "returnedIds": [
+            "f10",
+            "f1",
+            "f25",
+            "f22",
+            "f26",
+            "f54",
+            "f47",
+            "f56",
+            "f53",
+            "f14"
+          ],
+          "latencyMs": 0.4038749999999993
+        },
+        {
+          "queryId": "q11",
+          "category": "exact",
+          "expectedFactIds": [
+            "f35"
+          ],
+          "returnedIds": [
+            "f35",
+            "f30",
+            "f5",
+            "f1",
+            "f10",
+            "f2",
+            "f49",
+            "f34",
+            "f11",
+            "f4"
+          ],
+          "latencyMs": 0.5057499999999777
+        },
+        {
+          "queryId": "q12",
+          "category": "exact",
+          "expectedFactIds": [
+            "f14"
+          ],
+          "returnedIds": [
+            "f14",
+            "f53",
+            "f51",
+            "f31",
+            "f36",
+            "f12",
+            "f7",
+            "f25",
+            "f3",
+            "f50"
+          ],
+          "latencyMs": 0.5097499999999968
+        },
+        {
+          "queryId": "q13",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f3",
+            "f24",
+            "f29",
+            "f22",
+            "f14",
+            "f12",
+            "f10",
+            "f4",
+            "f25",
+            "f43"
+          ],
+          "latencyMs": 0.21329200000002402
+        },
+        {
+          "queryId": "q14",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f9",
+            "f8"
+          ],
+          "returnedIds": [
+            "f19",
+            "f17",
+            "f9",
+            "f13",
+            "f20",
+            "f16",
+            "f12",
+            "f32",
+            "f8",
+            "f5"
+          ],
+          "latencyMs": 0.22083399999999642
+        },
+        {
+          "queryId": "q15",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f18",
+            "f42"
+          ],
+          "returnedIds": [
+            "f42",
+            "f59",
+            "f27",
+            "f51",
+            "f5",
+            "f4",
+            "f35",
+            "f29",
+            "f2",
+            "f14"
+          ],
+          "latencyMs": 0.48108400000000984
+        },
+        {
+          "queryId": "q16",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f30",
+            "f47"
+          ],
+          "returnedIds": [
+            "f30",
+            "f47",
+            "f50",
+            "f19",
+            "f24",
+            "f10",
+            "f56",
+            "f43",
+            "f3",
+            "f2"
+          ],
+          "latencyMs": 0.5119589999999903
+        },
+        {
+          "queryId": "q17",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f20"
+          ],
+          "returnedIds": [
+            "f20",
+            "f39",
+            "f17",
+            "f29",
+            "f30",
+            "f56",
+            "f21",
+            "f16",
+            "f43",
+            "f33"
+          ],
+          "latencyMs": 0.3012499999999818
+        },
+        {
+          "queryId": "q18",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f50",
+            "f58"
+          ],
+          "returnedIds": [
+            "f19",
+            "f56",
+            "f58",
+            "f11",
+            "f39",
+            "f54",
+            "f20",
+            "f16",
+            "f32",
+            "f5"
+          ],
+          "latencyMs": 0.444500000000005
+        },
+        {
+          "queryId": "q19",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f15"
+          ],
+          "returnedIds": [
+            "f3",
+            "f10",
+            "f24",
+            "f43",
+            "f31",
+            "f2",
+            "f22",
+            "f48",
+            "f8",
+            "f60"
+          ],
+          "latencyMs": 0.36991699999998673
+        },
+        {
+          "queryId": "q20",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f55"
+          ],
+          "returnedIds": [
+            "f55",
+            "f49",
+            "f47",
+            "f16",
+            "f31",
+            "f7",
+            "f8",
+            "f25",
+            "f6",
+            "f59"
+          ],
+          "latencyMs": 0.5013749999999959
+        },
+        {
+          "queryId": "q21",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f8",
+            "f44"
+          ],
+          "returnedIds": [
+            "f8",
+            "f13",
+            "f9",
+            "f3",
+            "f56",
+            "f55",
+            "f10",
+            "f1",
+            "f5",
+            "f11"
+          ],
+          "latencyMs": 0.2980840000000171
+        },
+        {
+          "queryId": "q22",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f28"
+          ],
+          "returnedIds": [
+            "f28",
+            "f57",
+            "f34",
+            "f54",
+            "f52",
+            "f49",
+            "f5",
+            "f32",
+            "f20",
+            "f15"
+          ],
+          "latencyMs": 0.5327920000000006
+        },
+        {
+          "queryId": "q23",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f25"
+          ],
+          "returnedIds": [
+            "f25",
+            "f36",
+            "f58",
+            "f55",
+            "f30",
+            "f5",
+            "f44",
+            "f15",
+            "f39",
+            "f3"
+          ],
+          "latencyMs": 0.5793339999999887
+        },
+        {
+          "queryId": "q24",
+          "category": "paraphrase",
+          "expectedFactIds": [
+            "f56"
+          ],
+          "returnedIds": [
+            "f13",
+            "f7",
+            "f22",
+            "f9",
+            "f58",
+            "f27",
+            "f36",
+            "f52"
+          ],
+          "latencyMs": 0.5972909999999843
+        },
+        {
+          "queryId": "q25",
+          "category": "associative",
+          "expectedFactIds": [
+            "f6",
+            "f5",
+            "f16"
+          ],
+          "returnedIds": [
+            "f35",
+            "f1",
+            "f17",
+            "f16",
+            "f24",
+            "f56",
+            "f31",
+            "f19",
+            "f48",
+            "f12"
+          ],
+          "latencyMs": 0.8622080000000096
+        },
+        {
+          "queryId": "q26",
+          "category": "associative",
+          "expectedFactIds": [
+            "f13",
+            "f12",
+            "f11"
+          ],
+          "returnedIds": [
+            "f39",
+            "f37",
+            "f43",
+            "f23",
+            "f38",
+            "f20",
+            "f31",
+            "f3",
+            "f34",
+            "f16"
+          ],
+          "latencyMs": 0.4781250000000057
+        },
+        {
+          "queryId": "q27",
+          "category": "associative",
+          "expectedFactIds": [
+            "f15",
+            "f18",
+            "f14"
+          ],
+          "returnedIds": [
+            "f15",
+            "f3",
+            "f13",
+            "f60",
+            "f27",
+            "f55",
+            "f40",
+            "f36",
+            "f10",
+            "f30"
+          ],
+          "latencyMs": 0.5095000000000027
+        },
+        {
+          "queryId": "q28",
+          "category": "associative",
+          "expectedFactIds": [
+            "f34",
+            "f1"
+          ],
+          "returnedIds": [
+            "f34",
+            "f1",
+            "f41",
+            "f37",
+            "f22",
+            "f44",
+            "f45",
+            "f40",
+            "f14",
+            "f12"
+          ],
+          "latencyMs": 0.28408300000000963
+        },
+        {
+          "queryId": "q29",
+          "category": "associative",
+          "expectedFactIds": [
+            "f19",
+            "f4"
+          ],
+          "returnedIds": [
+            "f19",
+            "f60",
+            "f4",
+            "f6",
+            "f42",
+            "f34",
+            "f49",
+            "f41",
+            "f1",
+            "f2"
+          ],
+          "latencyMs": 0.5449169999999981
+        },
+        {
+          "queryId": "q30",
+          "category": "associative",
+          "expectedFactIds": [
+            "f36",
+            "f14",
+            "f48"
+          ],
+          "returnedIds": [
+            "f14",
+            "f43",
+            "f9",
+            "f37",
+            "f31",
+            "f7",
+            "f36",
+            "f34",
+            "f22",
+            "f12"
+          ],
+          "latencyMs": 0.5390840000000026
+        },
+        {
+          "queryId": "q31",
+          "category": "associative",
+          "expectedFactIds": [
+            "f40",
+            "f3",
+            "f50"
+          ],
+          "returnedIds": [
+            "f40",
+            "f17",
+            "f3",
+            "f37",
+            "f58",
+            "f50",
+            "f49",
+            "f19",
+            "f34",
+            "f47"
+          ],
+          "latencyMs": 0.515749999999997
+        },
+        {
+          "queryId": "q32",
+          "category": "associative",
+          "expectedFactIds": [
+            "f9",
+            "f8",
+            "f44"
+          ],
+          "returnedIds": [
+            "f9",
+            "f8",
+            "f12",
+            "f60",
+            "f49",
+            "f45",
+            "f19",
+            "f43",
+            "f13",
+            "f1"
+          ],
+          "latencyMs": 0.5292080000000112
+        },
+        {
+          "queryId": "q33",
+          "category": "associative",
+          "expectedFactIds": [
+            "f54",
+            "f50",
+            "f53"
+          ],
+          "returnedIds": [
+            "f54",
+            "f46",
+            "f58",
+            "f27",
+            "f22",
+            "f9",
+            "f10",
+            "f36",
+            "f52",
+            "f24"
+          ],
+          "latencyMs": 0.47595799999999144
+        },
+        {
+          "queryId": "q34",
+          "category": "associative",
+          "expectedFactIds": [
+            "f10",
+            "f6"
+          ],
+          "returnedIds": [
+            "f10",
+            "f16",
+            "f1",
+            "f15",
+            "f6",
+            "f42",
+            "f43",
+            "f11",
+            "f60",
+            "f39"
+          ],
+          "latencyMs": 0.3790419999999983
+        },
+        {
+          "queryId": "q35",
+          "category": "associative",
+          "expectedFactIds": [
+            "f37",
+            "f13"
+          ],
+          "returnedIds": [
+            "f37",
+            "f31",
+            "f11",
+            "f5",
+            "f21",
+            "f27",
+            "f28",
+            "f47",
+            "f44",
+            "f35"
+          ],
+          "latencyMs": 0.5893330000000105
+        },
+        {
+          "queryId": "q36",
+          "category": "associative",
+          "expectedFactIds": [
+            "f59",
+            "f51"
+          ],
+          "returnedIds": [
+            "f59",
+            "f8",
+            "f28",
+            "f11",
+            "f17",
+            "f20",
+            "f53",
+            "f52",
+            "f16",
+            "f27"
+          ],
+          "latencyMs": 0.5632079999999746
+        },
+        {
+          "queryId": "q37",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f3"
+          ],
+          "returnedIds": [
+            "f3",
+            "f49",
+            "f40",
+            "f22",
+            "f48",
+            "f32",
+            "f19",
+            "f47",
+            "f55",
+            "f45"
+          ],
+          "latencyMs": 0.5132499999999993
+        },
+        {
+          "queryId": "q38",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f52"
+          ],
+          "returnedIds": [
+            "f52",
+            "f29",
+            "f23",
+            "f57",
+            "f32",
+            "f24",
+            "f46",
+            "f35",
+            "f45",
+            "f36"
+          ],
+          "latencyMs": 0.5930420000000254
+        },
+        {
+          "queryId": "q39",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f4",
+            "f55"
+          ],
+          "returnedIds": [
+            "f4",
+            "f55",
+            "f19",
+            "f6",
+            "f42"
+          ],
+          "latencyMs": 0.19054199999999355
+        },
+        {
+          "queryId": "q40",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f7"
+          ],
+          "returnedIds": [
+            "f7",
+            "f14",
+            "f4",
+            "f39",
+            "f48",
+            "f35",
+            "f44",
+            "f57",
+            "f33",
+            "f29"
+          ],
+          "latencyMs": 0.35770899999999983
+        },
+        {
+          "queryId": "q41",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f8",
+            "f9"
+          ],
+          "returnedIds": [
+            "f8",
+            "f3",
+            "f55",
+            "f9",
+            "f32",
+            "f5",
+            "f12",
+            "f11",
+            "f13",
+            "f18"
+          ],
+          "latencyMs": 0.46962500000000773
+        },
+        {
+          "queryId": "q42",
+          "category": "topic_return",
+          "expectedFactIds": [
+            "f6",
+            "f5"
+          ],
+          "returnedIds": [
+            "f6",
+            "f12",
+            "f14",
+            "f16",
+            "f59",
+            "f11",
+            "f56",
+            "f51",
+            "f50",
+            "f60"
+          ],
+          "latencyMs": 0.552250000000015
+        }
+      ],
+      "stats": {
+        "nodeCount": 60,
+        "dbSizeBytes": 4096,
+        "edgeCount": 0
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "adapterName": "AIAgentLocalMemory",
+      "byCategory": [
+        {
+          "category": "exact",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.6666666666666666,
+            "3": 0.8333333333333334,
+            "5": 0.8333333333333334,
+            "10": 1
+          },
+          "mrr": 0.8138888888888888,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 1.4676804166666646,
+            "p50Ms": 0.970832999999999,
+            "p95Ms": 6.7636249999999905,
+            "maxMs": 6.7636249999999905
+          }
+        },
+        {
+          "category": "paraphrase",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.5,
+            "3": 0.5833333333333334,
+            "5": 0.7083333333333334,
+            "10": 0.7083333333333334
+          },
+          "mrr": 0.6486111111111111,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 0.8621183333333301,
+            "p50Ms": 0.8953340000000196,
+            "p95Ms": 1.046750000000003,
+            "maxMs": 1.046750000000003
+          }
+        },
+        {
+          "category": "associative",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.25,
+            "3": 0.4166666666666667,
+            "5": 0.5,
+            "10": 0.611111111111111
+          },
+          "mrr": 0.6875,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 1.2224478333333313,
+            "p50Ms": 1.187041999999991,
+            "p95Ms": 1.883375000000001,
+            "maxMs": 1.883375000000001
+          }
+        },
+        {
+          "category": "topic_return",
+          "queryCount": 6,
+          "recallAt": {
+            "1": 0.75,
+            "3": 0.8333333333333334,
+            "5": 0.8333333333333334,
+            "10": 0.9166666666666666
+          },
+          "mrr": 1,
+          "queryLatency": {
+            "count": 6,
+            "meanMs": 0.8390903333333313,
+            "p50Ms": 0.8604589999999916,
+            "p95Ms": 0.9959580000000017,
+            "maxMs": 0.9959580000000017
+          }
+        }
+      ],
+      "overall": {
+        "category": "overall",
+        "queryCount": 42,
+        "recallAt": {
+          "1": 0.5119047619047619,
+          "3": 0.6428571428571429,
+          "5": 0.7023809523809523,
+          "10": 0.7936507936507937
+        },
+        "mrr": 0.7571428571428571,
+        "queryLatency": {
+          "count": 42,
+          "meanMs": 1.1347976428571405,
+          "p50Ms": 0.9343340000000069,
+          "p95Ms": 1.592458999999991,
+          "maxMs": 6.7636249999999905
+        }
+      },
+      "ingestLatency": {
+        "count": 60,
+        "meanMs": 0.07312288333333328,
+        "p50Ms": 0.06129200000000168,
+        "p95Ms": 0.16574999999999918,
+        "maxMs": 0.35783300000000295
+      },
+      "stats": {
+        "nodeCount": 60,
+        "edgeCount": 70,
+        "dbSizeBytes": 118784
+      }
+    },
+    {
+      "adapterName": "magic-context (FTS5 baseline)",
+      "byCategory": [
+        {
+          "category": "exact",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.6666666666666666,
+            "3": 0.8333333333333334,
+            "5": 0.8333333333333334,
+            "10": 1
+          },
+          "mrr": 0.8148148148148148,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 0.49493041666666215,
+            "p50Ms": 0.5057499999999777,
+            "p95Ms": 0.6392079999999964,
+            "maxMs": 0.6392079999999964
+          }
+        },
+        {
+          "category": "paraphrase",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.5416666666666666,
+            "3": 0.6666666666666666,
+            "5": 0.6666666666666666,
+            "10": 0.7083333333333334
+          },
+          "mrr": 0.7222222222222222,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 0.4209759999999984,
+            "p50Ms": 0.48108400000000984,
+            "p95Ms": 0.5972909999999843,
+            "maxMs": 0.5972909999999843
+          }
+        },
+        {
+          "category": "associative",
+          "queryCount": 12,
+          "recallAt": {
+            "1": 0.34722222222222215,
+            "3": 0.4861111111111111,
+            "5": 0.5555555555555555,
+            "10": 0.611111111111111
+          },
+          "mrr": 0.8541666666666666,
+          "queryLatency": {
+            "count": 12,
+            "meanMs": 0.5225346666666676,
+            "p50Ms": 0.5292080000000112,
+            "p95Ms": 0.8622080000000096,
+            "maxMs": 0.8622080000000096
+          }
+        },
+        {
+          "category": "topic_return",
+          "queryCount": 6,
+          "recallAt": {
+            "1": 0.75,
+            "3": 0.8333333333333334,
+            "5": 0.9166666666666666,
+            "10": 0.9166666666666666
+          },
+          "mrr": 1,
+          "queryLatency": {
+            "count": 6,
+            "meanMs": 0.44606966666667347,
+            "p50Ms": 0.5132499999999993,
+            "p95Ms": 0.5930420000000254,
+            "maxMs": 0.5930420000000254
+          }
+        }
+      ],
+      "overall": {
+        "category": "overall",
+        "queryCount": 42,
+        "recallAt": {
+          "1": 0.5515873015873015,
+          "3": 0.6865079365079365,
+          "5": 0.7182539682539681,
+          "10": 0.7936507936507935
+        },
+        "mrr": 0.826058201058201,
+        "queryLatency": {
+          "count": 42,
+          "meanMs": 0.47470740476190426,
+          "p50Ms": 0.5057499999999777,
+          "p95Ms": 0.5972909999999843,
+          "maxMs": 0.8622080000000096
+        }
+      },
+      "ingestLatency": {
+        "count": 60,
+        "meanMs": 0.06547781666666831,
+        "p50Ms": 0.05520799999999326,
+        "p95Ms": 0.1661670000000015,
+        "maxMs": 0.2429170000000056
+      },
+      "stats": {
+        "nodeCount": 60,
+        "dbSizeBytes": 4096,
+        "edgeCount": 0
+      }
+    }
+  ]
+}
