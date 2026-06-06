@@ -96,13 +96,13 @@ function parseTagRanges(input: string): number[] {
 }
 
 const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
-  const projectId = projectIdFromDir(directory);
+  const sessionId = projectIdFromDir(directory);
   const pluginConfig = loadConfig(directory);
   const storage = new SqliteStorageProvider();
   const engine = new NeuralContextEngine();
 
   try {
-    await engine.init({ storage, projectId });
+    await engine.init({ storage, projectId: "global" });
   } catch (err) {
     console.error("[ai-agent-local-memory] init failed:", err);
     return {} as Hooks;
@@ -123,7 +123,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
   const renderer = new ContextRenderer(graph, workingMemory, storage, renderConfig);
 
   let turnCounter = 0;
-  const sessionId = projectId;
 
   const z = tool.schema;
 
@@ -212,7 +211,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
             .map((n) => `  - ${formatNode(n)}`)
             .join("\n");
           const output = [
-            `Project: ${projectId}`,
+            `Session: ${sessionId}`,
             `Nodes: ${stats.nodeCount}`,
             `Edges: ${stats.edgeCount}`,
             `Working memory: ${stats.workingMemorySize}`,
@@ -238,7 +237,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
         },
         async execute(args) {
           const tags = parseTagRanges(args.drop);
-          const episodes = await storage.queryNodes({ type: "episode", sourceSession: projectId });
+          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
           let suppressed = 0;
           for (const node of episodes) {
             const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;
@@ -268,7 +267,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory }) => {
         },
         async execute(args) {
           const tags = parseTagRanges(args.tags);
-          const episodes = await storage.queryNodes({ type: "episode", sourceSession: projectId });
+          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
           let pinned = 0;
           for (const node of episodes) {
             const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;

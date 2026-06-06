@@ -61,9 +61,9 @@ const EDGE_UPDATE_COLUMNS: Record<string, string> = {
   coactivationCount: 'coactivation_count',
 };
 
-function getStoragePath(projectId: string): string {
+function getStoragePath(_projectId?: string): string {
   const base = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-  return join(base, 'ai-agent-local-memory', 'projects', projectId, 'graph.db');
+  return join(base, 'ai-agent-local-memory', 'graph.db');
 }
 
 function rowToNode(row: NodeRow): MemoryNode {
