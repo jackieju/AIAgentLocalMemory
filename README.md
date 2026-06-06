@@ -74,33 +74,30 @@ LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01
 
 ### Install
 
-#### Option A: Local install (from source)
+#### Option A: npm (recommended)
+
+Add to `opencode.json` or `opencode.jsonc`:
+```json
+{
+  "plugin": ["ai-agent-local-memory"]
+}
+```
+
+Restart OpenCode — it will automatically download and load the plugin.
+
+#### Option B: From source
 
 Clone and build:
 ```bash
 git clone https://github.com/jackieju/AIAgentLocalMemory.git
 cd AIAgentLocalMemory
 bun install
-```
-
-Build a self-contained bundle and install to OpenCode's global plugins directory:
-```bash
-cd packages/adapter-opencode
-bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin
+bun build packages/adapter-opencode/src/index.ts --outdir dist --target bun --external @opencode-ai/plugin
 mkdir -p ~/.config/opencode/plugins
 cp dist/index.js ~/.config/opencode/plugins/ai-agent-local-memory.js
 ```
 
-That's it. Restart OpenCode — the plugin is loaded automatically from the `plugins/` directory.
-
-#### Option B: npm install (when published)
-
-Add to `opencode.json`:
-```json
-{
-  "plugin": ["@ai-agent-local-memory/adapter-opencode"]
-}
-```
+Restart OpenCode — the plugin is loaded automatically from the `plugins/` directory.
 
 ### Per-project control
 
