@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "./dist",
+    "declaration": true,
+    "paths": {
+      "@ai-agent-local-memory/core": ["../core/src/index.ts"],
+      "@ai-agent-local-memory/storage-sqlite": ["../storage-sqlite/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

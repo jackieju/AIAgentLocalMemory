@@ -1,0 +1,20 @@
+{
+  "name": "@ai-agent-local-memory/adapter-openclaw",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2"
+    }
+  },
+  "dependencies": {
+    "@ai-agent-local-memory/core": "workspace:*",
+    "@ai-agent-local-memory/storage-sqlite": "workspace:*",
+    "@sinclair/typebox": "^0.34.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.0"
+  }
+}

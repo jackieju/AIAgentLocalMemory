@@ -9,7 +9,7 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 │  Adapter Layer (per-host)                        │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
 │  │ OpenCode │  │ OpenClaw │  │  CLI/API │      │
-│  │ Adapter  │  │ (future) │  │ (future) │      │
+│  │ Adapter  │  │ Adapter  │  │ (future) │      │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
 ├───────┼──────────────┼──────────────┼────────────┤
 │  ┌─────────────────────────────────────────┐    │
@@ -36,6 +36,7 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 | `@ai-agent-local-memory/core` | Host-agnostic engine: graph, Hebbian learning, spreading activation, working memory |
 | `@ai-agent-local-memory/storage-sqlite` | SQLite + FTS5 storage implementation |
 | `@ai-agent-local-memory/adapter-opencode` | OpenCode plugin adapter |
+| `@ai-agent-local-memory/adapter-openclaw` | OpenClaw plugin adapter |
 
 ## Data Model
 
@@ -178,6 +179,59 @@ In standalone mode, this plugin handles:
 - Cross-session memory (neural graph with Hebbian learning)
 - Session facts and notes
 - Full context window management
+
+## OpenClaw Installation
+
+```bash
+openclaw plugins install @ai-agent-local-memory/adapter-openclaw
+openclaw gateway restart
+```
+
+Configure in `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "slots": {
+      "memory": "neural-context"
+    },
+    "entries": {
+      "neural-context": {
+        "enabled": true,
+        "hooks": {
+          "allowPromptInjection": true,
+          "allowConversationAccess": true
+        },
+        "config": {
+          "autoRecall": true,
+          "autoCapture": true,
+          "maxRecallResults": 10
+        }
+      }
+    }
+  }
+}
+```
+
+### OpenClaw Configuration Options
+
+| Option | Default | Description |
+|---|---|---|
+| `storageDir` | `~/.local/share/ai-agent-local-memory` | Custom storage directory |
+| `autoRecall` | `true` | Inject relevant memories before every AI turn via spreading activation |
+| `autoCapture` | `true` | Store conversations and build associative edges after every turn |
+| `maxRecallResults` | `10` | Maximum memories injected into context per turn |
+| `debug` | `false` | Enable verbose debug logs |
+
+### OpenClaw Tools Provided
+
+| Tool | Description |
+|---|---|
+| `neural_recall` | Find memories by ASSOCIATION via graph traversal + spreading activation |
+| `neural_remember` | Store information with automatic associative linking |
+| `neural_forget` | Remove a memory node by ID |
+| `neural_note` | Save durable facts/notes that persist across sessions |
+| `neural_status` | View engine stats and working memory |
 
 ## Development
 
