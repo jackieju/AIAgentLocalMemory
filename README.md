@@ -240,7 +240,56 @@ OpenCode and OpenClaw adapters use **separate** memory stores by default:
 ~/.local/share/ai-agent-local-memory-openclaw/  ← OpenClaw adapter
 ```
 
-This prevents cross-contamination between different AI hosts. To share memory between hosts, set the same `storageDir` in both adapters' config.
+This prevents cross-contamination between different AI hosts.
+
+### Custom storage path
+
+**OpenCode**: set in `neural-context.json` (project root or `.opencode/`):
+```json
+{
+  "storageDir": "/path/to/custom/storage"
+}
+```
+
+Or via environment variable:
+```bash
+export AI_AGENT_LOCAL_MEMORY_DIR=/path/to/custom/storage
+```
+
+**OpenClaw**: set in `~/.openclaw/openclaw.json` under plugin config:
+```json
+{
+  "plugins": {
+    "entries": {
+      "neural-context": {
+        "config": {
+          "storageDir": "/path/to/custom/storage"
+        }
+      }
+    }
+  }
+}
+```
+
+### Sharing memory between hosts
+
+To make OpenCode and OpenClaw share the same memory graph, point both to the same directory:
+
+**OpenCode** `neural-context.json`:
+```json
+{
+  "storageDir": "~/.local/share/ai-agent-local-memory"
+}
+```
+
+**OpenClaw** plugin config:
+```json
+{
+  "storageDir": "~/.local/share/ai-agent-local-memory"
+}
+```
+
+Note: SQLite WAL mode handles concurrent reads safely. Concurrent writes are rare (only on session end) and retried automatically via busy timeout.
 
 ## Backup
 
