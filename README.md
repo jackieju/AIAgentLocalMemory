@@ -148,6 +148,7 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
 | `neural_reduce` | Drop tagged content (suppress from rendering) |
 | `neural_pin` | Pin content to always show at full fidelity |
 | `neural_expand` | Expand compressed/elided content back to full text |
+| `neural_backup` | Backup the entire memory graph to a timestamped directory |
 | `neural_status` | View engine stats and working memory |
 
 ## Using alongside magic-context
@@ -245,6 +246,34 @@ Memories stored via OpenClaw are immediately available in OpenCode and vice vers
 SQLite WAL mode handles concurrent reads. Concurrent writes are rare (only on `agent_end`) and are retried automatically via SQLite's busy timeout.
 
 To use separate memory stores, set a custom `storageDir` in one adapter's config.
+
+## Backup
+
+### Via tool (in OpenCode)
+
+Call `neural_backup` during a session:
+```
+neural_backup()                           → backs up to ~/.local/share/ai-agent-local-memory/backups/<timestamp>/
+neural_backup(destination="/path/to/dir") → backs up to custom directory
+```
+
+### Manual backup
+
+```bash
+cp -r ~/.local/share/ai-agent-local-memory/ ~/backup/ai-agent-local-memory-$(date +%Y%m%d)/
+```
+
+Data directory contents:
+```
+~/.local/share/ai-agent-local-memory/
+├── graph.db          ← all nodes, edges, FTS index (single SQLite file)
+├── graph.db-wal      ← WAL journal (may not exist when idle)
+├── graph.db-shm      ← shared memory (may not exist when idle)
+├── episodes/         ← raw session JSON files
+└── backups/          ← created by neural_backup tool
+```
+
+For a consistent backup, ensure no active write operations are in progress. SQLite WAL mode guarantees that copying `graph.db` + `graph.db-wal` together is always consistent.
 
 ## Development
 

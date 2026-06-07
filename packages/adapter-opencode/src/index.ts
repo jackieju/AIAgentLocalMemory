@@ -396,6 +396,52 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         },
       }),
 
+      neural_backup: tool({
+        description:
+          "Backup the entire neural memory graph to a timestamped directory. Returns the backup path.",
+        args: {
+          destination: z.string().optional().describe("Custom backup directory. Default: ~/.local/share/ai-agent-local-memory/backups/<timestamp>/"),
+        },
+        async execute(args) {
+          const { cpSync, mkdirSync } = await import("node:fs");
+          const dataDir = process.env.AI_AGENT_LOCAL_MEMORY_DIR
+            ? join(process.env.AI_AGENT_LOCAL_MEMORY_DIR)
+            : join(homedir(), ".local", "share", "ai-agent-local-memory");
+          const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+          const backupDir = args.destination || join(dataDir, "backups", timestamp);
+
+          mkdirSync(backupDir, { recursive: true });
+          cpSync(dataDir, backupDir, {
+            recursive: true,
+            filter: (src) => !src.includes("/backups/"),
+          });
+
+          const { statSync, readdirSync } = await import("node:fs");
+          let totalSize = 0;
+          const countFiles = (dir: string): number => {
+            let count = 0;
+            for (const entry of readdirSync(dir, { withFileTypes: true })) {
+              const p = join(dir, entry.name);
+              if (entry.isDirectory()) {
+                count += countFiles(p);
+              } else {
+                count++;
+                totalSize += statSync(p).size;
+              }
+            }
+            return count;
+          };
+          const fileCount = countFiles(backupDir);
+          const sizeMB = (totalSize / 1024 / 1024).toFixed(2);
+
+          return {
+            title: `Backup complete (${sizeMB} MB)`,
+            output: `Backed up to: ${backupDir}\nFiles: ${fileCount}\nSize: ${sizeMB} MB`,
+            metadata: { backupDir, fileCount, sizeMB },
+          };
+        },
+      }),
+
       neural_note: tool({
         description:
           "Save or manage durable notes/facts that persist across conversation and survive compression. Facts are automatically surfaced in context when relevant concepts activate.",
