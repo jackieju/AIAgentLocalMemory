@@ -180,6 +180,25 @@ In standalone mode, this plugin handles:
 
 ## OpenClaw Installation
 
+#### Option A: From source (link)
+
+```bash
+git clone https://github.com/jackieju/AIAgentLocalMemory.git
+cd AIAgentLocalMemory
+bun install
+bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target bun --external "@sinclair/typebox"
+openclaw plugins install --link packages/adapter-openclaw
+openclaw gateway restart
+```
+
+This links the plugin to the source directory. To update after code changes:
+```bash
+bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target bun --external "@sinclair/typebox"
+openclaw gateway restart
+```
+
+#### Option B: npm (when published)
+
 ```bash
 openclaw plugins install @ai-agent-local-memory/adapter-openclaw
 openclaw gateway restart
