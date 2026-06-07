@@ -231,21 +231,16 @@ Configure in `~/.openclaw/openclaw.json`:
 | `neural_note` | Save durable facts/notes that persist across sessions |
 | `neural_status` | View engine stats and working memory |
 
-## Shared Memory Across Hosts
+## Storage Isolation
 
-If you install AIAgentLocalMemory in both OpenCode and OpenClaw, they share the same memory graph by default:
+OpenCode and OpenClaw adapters use **separate** memory stores by default:
 
 ```
-~/.local/share/ai-agent-local-memory/
-├── graph.db       ← shared by both adapters
-└── episodes/      ← shared
+~/.local/share/ai-agent-local-memory/           ← OpenCode adapter
+~/.local/share/ai-agent-local-memory-openclaw/  ← OpenClaw adapter
 ```
 
-Memories stored via OpenClaw are immediately available in OpenCode and vice versa. Both adapters use `projectId: "global"` and the same default storage path.
-
-SQLite WAL mode handles concurrent reads. Concurrent writes are rare (only on `agent_end`) and are retried automatically via SQLite's busy timeout.
-
-To use separate memory stores, set a custom `storageDir` in one adapter's config.
+This prevents cross-contamination between different AI hosts. To share memory between hosts, set the same `storageDir` in both adapters' config.
 
 ## Backup
 

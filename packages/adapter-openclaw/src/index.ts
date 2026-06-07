@@ -26,7 +26,7 @@ function parseConfig(raw: unknown): NeuralContextConfig {
 function getStoragePath(cfg: NeuralContextConfig): string {
   if (cfg.storageDir) return cfg.storageDir;
   const base = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-  return join(base, "ai-agent-local-memory");
+  return join(base, "ai-agent-local-memory-openclaw");
 }
 
 type OpenClawPluginApi = {
