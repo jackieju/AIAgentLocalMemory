@@ -18,13 +18,14 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 │  │  • Spreading Activation                 │    │
 │  │  • Hebbian Learning / Decay             │    │
 │  │  • Working Memory Queue                 │    │
+│  │  • Context Renderer (f0-f4 fidelity)    │    │
 │  │  • Session Abstraction                  │    │
 │  └────────────────────┬────────────────────┘    │
 ├───────────────────────┼──────────────────────────┤
 │  ┌─────────────────────────────────────────┐    │
 │  │         Storage Layer (pluggable)        │    │
 │  │  • SQLite + FTS5 (default)              │    │
-│  │  • Custom StorageProvider               │    │
+│  │  • Cross-runtime: bun:sqlite / node:sqlite │  │
 │  └─────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────┘
 ```
@@ -33,10 +34,10 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 
 | Package | Description |
 |---|---|
-| `@ai-agent-local-memory/core` | Host-agnostic engine: graph, Hebbian learning, spreading activation, working memory |
-| `@ai-agent-local-memory/storage-sqlite` | SQLite + FTS5 storage implementation |
-| `@ai-agent-local-memory/adapter-opencode` | OpenCode plugin adapter |
-| `@ai-agent-local-memory/adapter-openclaw` | OpenClaw plugin adapter |
+| `@ai-agent-local-memory/core` | Host-agnostic engine: graph, Hebbian learning, spreading activation, working memory, context renderer |
+| `@ai-agent-local-memory/storage-sqlite` | SQLite + FTS5 storage (cross-runtime: Bun and Node.js) |
+| `@ai-agent-local-memory/adapter-opencode` | OpenCode plugin adapter (full context management) |
+| `@ai-agent-local-memory/adapter-openclaw` | OpenClaw plugin adapter (ContextEngine + memory slot) |
 
 ## Data Model
 
@@ -47,6 +48,7 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 - `filler` — Low-priority context
 - `episode` — Full conversation reference
 - `meta` — Hub node (consolidated summary)
+- `fact` — Durable note/fact that persists across sessions
 
 **Synapses (Edges):** Weighted connections with types:
 - `entity` — Shared named entity
@@ -61,16 +63,32 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 ### Hebbian Learning
 Edges strengthen on co-activation: `Δw = η × (1 - w)` (asymptotic, never exceeds 1). Edges decay over time: `w = w × exp(-λ × Δt)`. Weak, old, rarely-used edges get pruned.
 
-### Retrieval (Dual-Path)
-1. Check working memory queue (recently/frequently accessed nodes)
-2. If found → use as seeds for spreading activation
-3. If not → full-text search (FTS5) → top results become seeds
-4. Spreading activation propagates through graph edges with hop decay
+### Retrieval (Hybrid Scoring)
+1. Full-text search (FTS5, OR mode) → ranked by BM25
+2. Working memory boost for recently accessed nodes
+3. Spreading activation from top seeds → discover associated memories
+4. Hybrid score = `FTS_weight × fts_score + activation_weight × spread_score`
+5. Results sorted by descending relevance
+
+### Context Rendering (f0-f4 Fidelity)
+Every conversation message is stored as an episode node. When assembling context:
+1. Run spreading activation from current topic seeds
+2. Assign activation scores to each episode
+3. Binary search for threshold that fits within token budget
+4. Render each episode at appropriate fidelity level:
+   - **f0** — Full text (high activation / recent / pinned)
+   - **f1** — Paragraph summary (~200 tokens)
+   - **f2** — One-line gist (~30 tokens)
+   - **f3** — Title only (~8 tokens)
+   - **f4** — Elided placeholder (~5 tokens)
+5. Hysteresis band (±20%) prevents fidelity flickering between turns
 
 ### Working Memory
 LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01 × hours_since_access)`. Lowest-score items evicted when full.
 
-## Usage with OpenCode
+---
+
+## OpenCode Plugin
 
 ### Install
 
@@ -83,11 +101,10 @@ Add to `opencode.json` or `opencode.jsonc`:
 }
 ```
 
-Restart OpenCode — it will automatically download and load the plugin.
+Restart OpenCode.
 
 #### Option B: From source
 
-Clone and build:
 ```bash
 git clone https://github.com/jackieju/AIAgentLocalMemory.git
 cd AIAgentLocalMemory
@@ -97,47 +114,9 @@ mkdir -p ~/.config/opencode/plugins
 cp dist/index.js ~/.config/opencode/plugins/ai-agent-local-memory.js
 ```
 
-Restart OpenCode — the plugin is loaded automatically from the `plugins/` directory.
+Restart OpenCode.
 
-### Per-project control
-
-The plugin is installed globally but you can control behavior per-project:
-
-| Scenario | How |
-|---|---|
-| **All projects**: use alongside magic-context (default) | No config needed — auto-detected |
-| **This project**: AIAgentLocalMemory fully takes over | Create `neural-context.json` in project root with `{"coexistWithMagicContext": false}` and remove magic-context from project-level opencode.json |
-| **This project**: disable AIAgentLocalMemory | Add a project-level `opencode.json` that doesn't load the plugin |
-
-### Tools Provided
-
-| Tool | Description |
-|---|---|
-| `neural_remember` | Store a memory node (concept, assertion, definition, etc.) |
-| `neural_recall` | Query memories via spreading activation |
-| `neural_forget` | Remove a memory node by ID |
-| `neural_status` | View engine stats and working memory |
-
-### Configuration
-
-Create `neural-context.json` in your project root or `.opencode/` directory:
-
-```json
-{
-  "injectSystemPrompt": true,
-  "contextWindowTokens": 128000,
-  "budgetRatio": 0.6
-}
-```
-
-| Option | Default | Description |
-|---|---|---|
-| `injectSystemPrompt` | `true` | Inject relevant memories into the system prompt each turn |
-| `contextWindowTokens` | `128000` | Context window size in tokens for budget calculation |
-| `budgetRatio` | `0.6` | Fraction of context window allocated to history |
-| `coexistWithMagicContext` | auto-detected | Force coexistence mode on/off |
-
-### Tools Provided
+### OpenCode Tools
 
 | Tool | Description |
 |---|---|
@@ -148,52 +127,87 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
 | `neural_reduce` | Drop tagged content (suppress from rendering) |
 | `neural_pin` | Pin content to always show at full fidelity |
 | `neural_expand` | Expand compressed/elided content back to full text |
+| `neural_import_history` | Import past OpenCode sessions into the neural graph |
 | `neural_backup` | Backup the entire memory graph to a timestamped directory |
 | `neural_status` | View engine stats and working memory |
 
-## Using alongside magic-context
+### OpenCode Configuration
 
-**Automatic coexistence detection**: When this plugin detects magic-context in your `opencode.json`, it automatically enters coexistence mode:
+Create `neural-context.json` in your project root or `.opencode/` directory:
+
+```json
+{
+  "injectSystemPrompt": true,
+  "contextWindowTokens": 128000,
+  "budgetRatio": 0.6,
+  "coexistWithMagicContext": false
+}
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `injectSystemPrompt` | `true` | Inject relevant memories into the system prompt each turn |
+| `contextWindowTokens` | `128000` | Context window size in tokens for budget calculation |
+| `budgetRatio` | `0.6` | Fraction of context window allocated to history |
+| `coexistWithMagicContext` | auto-detected | Force coexistence mode on/off |
+
+### Standalone Mode (replaces magic-context)
+
+In standalone mode, this plugin fully manages the context window:
+- Conversation history compression (activation-based fidelity rendering)
+- Cross-session memory (neural graph with Hebbian learning)
+- Session facts and notes
+- Full context window budget management
+
+Replace magic-context in `opencode.json`:
+```json
+{
+  "plugin": ["ai-agent-local-memory"],
+  "compaction": { "auto": false, "prune": false }
+}
+```
+
+### Coexistence Mode (alongside magic-context)
+
+When magic-context is detected in your `opencode.json`, the plugin automatically enters coexistence mode:
 
 - `messages.transform` is **disabled** (magic-context handles context compression)
 - Memory content injection is **disabled** (avoids double injection)
 - Tool usage guide is **still injected** (so the agent knows neural_* tools exist)
 - All `neural_*` tools remain **fully functional** for associative memory
 
-In this mode, magic-context handles the "context window management" while AIAgentLocalMemory provides "associative memory" — a complementary relationship.
+In this mode, magic-context handles "context window management" while AIAgentLocalMemory provides "associative memory".
 
-### When to use standalone (without magic-context)
+### Per-project Control
 
-Replace magic-context entirely in `opencode.json`:
-```json
-{
-  "plugin": ["@ai-agent-local-memory/adapter-opencode"],
-  "compaction": { "auto": false, "prune": false }
-}
-```
+| Scenario | How |
+|---|---|
+| Use alongside magic-context (default) | No config needed — auto-detected |
+| AIAgentLocalMemory fully takes over | `neural-context.json`: `{"coexistWithMagicContext": false}` + remove magic-context from project opencode.json |
+| Disable AIAgentLocalMemory for this project | Use a project-level `opencode.json` that doesn't load the plugin |
 
-In standalone mode, this plugin handles:
-- Conversation history compression (activation-based fidelity rendering)
-- Cross-session memory (neural graph with Hebbian learning)
-- Session facts and notes
-- Full context window management
+---
 
-## OpenClaw Installation
+## OpenClaw Plugin
 
-#### Option A: From source (link)
+### Install
+
+#### Option A: From source (recommended for development)
 
 ```bash
 git clone https://github.com/jackieju/AIAgentLocalMemory.git
 cd AIAgentLocalMemory
 bun install
-bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target bun --external "@sinclair/typebox"
-openclaw plugins install --link packages/adapter-openclaw
+rm -rf packages/adapter-openclaw/node_modules
+bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target node --external "openclaw" --external "bun:sqlite" --external "node:sqlite"
+openclaw plugins install --force packages/adapter-openclaw
 openclaw gateway restart
 ```
 
-This links the plugin to the source directory. To update after code changes:
+To update after code changes:
 ```bash
-bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target bun --external "@sinclair/typebox"
+bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target node --external "openclaw" --external "bun:sqlite" --external "node:sqlite"
+cp packages/adapter-openclaw/dist/index.js ~/.openclaw/extensions/neural-context/dist/index.js
 openclaw gateway restart
 ```
 
@@ -204,14 +218,13 @@ openclaw plugins install @ai-agent-local-memory/adapter-openclaw
 openclaw gateway restart
 ```
 
-Configure in `~/.openclaw/openclaw.json`:
+### OpenClaw Configuration
+
+Add to `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "plugins": {
-    "slots": {
-      "memory": "neural-context"
-    },
     "entries": {
       "neural-context": {
         "enabled": true,
@@ -225,22 +238,35 @@ Configure in `~/.openclaw/openclaw.json`:
           "maxRecallResults": 10
         }
       }
+    },
+    "slots": {
+      "memory": "neural-context",
+      "contextEngine": "neural-context"
     }
   }
 }
 ```
 
-### OpenClaw Configuration Options
-
 | Option | Default | Description |
 |---|---|---|
-| `storageDir` | `~/.local/share/ai-agent-local-memory` | Custom storage directory |
+| `storageDir` | `~/.local/share/ai-agent-local-memory-openclaw` | Custom storage directory |
 | `autoRecall` | `true` | Inject relevant memories before every AI turn via spreading activation |
 | `autoCapture` | `true` | Store conversations and build associative edges after every turn |
 | `maxRecallResults` | `10` | Maximum memories injected into context per turn |
 | `debug` | `false` | Enable verbose debug logs |
 
-### OpenClaw Tools Provided
+### OpenClaw Context Engine
+
+The plugin registers as a full **ContextEngine** (`ownsCompaction: true`), providing:
+
+- **assemble()** — Activation-based fidelity rendering (f0-f4) within token budget
+- **compact()** — Delegates to OpenClaw's built-in compaction as fallback
+- **ingest() / afterTurn()** — Stores messages as episode nodes with automatic edge creation
+- **bootstrap()** — Initializes storage on session start
+
+This means conversation history is managed intelligently — old messages are compressed based on relevance (not just age), and re-activate to full fidelity when their topic becomes relevant again.
+
+### OpenClaw Tools
 
 | Tool | Description |
 |---|---|
@@ -250,111 +276,92 @@ Configure in `~/.openclaw/openclaw.json`:
 | `neural_note` | Save durable facts/notes that persist across sessions |
 | `neural_status` | View engine stats and working memory |
 
-## Storage Isolation
+---
 
-OpenCode and OpenClaw adapters use **separate** memory stores by default:
+## Storage
 
+### Default Paths
+
+| Adapter | Default Storage Path |
+|---|---|
+| OpenCode | `~/.local/share/ai-agent-local-memory/` |
+| OpenClaw | `~/.local/share/ai-agent-local-memory-openclaw/` |
+
+Storage contents:
 ```
-~/.local/share/ai-agent-local-memory/           ← OpenCode adapter
-~/.local/share/ai-agent-local-memory-openclaw/  ← OpenClaw adapter
+├── graph.db          ← all nodes, edges, FTS index (single SQLite file)
+├── graph.db-wal      ← WAL journal (may not exist when idle)
+├── graph.db-shm      ← shared memory (may not exist when idle)
+├── episodes/         ← raw session JSON files (original conversation text)
+└── backups/          ← created by neural_backup tool
 ```
 
-This prevents cross-contamination between different AI hosts.
+### Custom Storage Path
 
-### Custom storage path
-
-**OpenCode**: set in `neural-context.json` (project root or `.opencode/`):
+**OpenCode** — `neural-context.json` or env var:
 ```json
-{
-  "storageDir": "/path/to/custom/storage"
-}
+{ "storageDir": "/path/to/custom/storage" }
 ```
-
-Or via environment variable:
 ```bash
 export AI_AGENT_LOCAL_MEMORY_DIR=/path/to/custom/storage
 ```
 
-**OpenClaw**: set in `~/.openclaw/openclaw.json` under plugin config:
+**OpenClaw** — plugin config in `~/.openclaw/openclaw.json`:
 ```json
-{
-  "plugins": {
-    "entries": {
-      "neural-context": {
-        "config": {
-          "storageDir": "/path/to/custom/storage"
-        }
-      }
-    }
-  }
-}
+{ "plugins": { "entries": { "neural-context": { "config": { "storageDir": "/path/to/custom/storage" } } } } }
 ```
 
-### Sharing memory between hosts
+### Sharing Memory Between Hosts
 
-To make OpenCode and OpenClaw share the same memory graph, point both to the same directory:
+Point both adapters to the same directory to share a single memory graph:
 
-**OpenCode** `neural-context.json`:
 ```json
-{
-  "storageDir": "~/.local/share/ai-agent-local-memory"
-}
+// OpenCode neural-context.json
+{ "storageDir": "~/.local/share/ai-agent-shared-memory" }
+
+// OpenClaw plugin config
+{ "storageDir": "~/.local/share/ai-agent-shared-memory" }
 ```
 
-**OpenClaw** plugin config:
-```json
-{
-  "storageDir": "~/.local/share/ai-agent-local-memory"
-}
-```
-
-Note: SQLite WAL mode handles concurrent reads safely. Concurrent writes are rare (only on session end) and retried automatically via busy timeout.
+SQLite WAL mode handles concurrent reads safely. Concurrent writes are rare and retried via busy timeout.
 
 ## Backup
 
-### Via tool (in OpenCode)
+### Via Tool (in OpenCode)
 
-Call `neural_backup` during a session:
 ```
-neural_backup()                           → backs up to ~/.local/share/ai-agent-local-memory/backups/<timestamp>/
-neural_backup(destination="/path/to/dir") → backs up to custom directory
+neural_backup()                           → ~/.local/share/ai-agent-local-memory/backups/<timestamp>/
+neural_backup(destination="/path/to/dir") → custom path
 ```
 
-### Manual backup
+### Manual
 
 ```bash
 cp -r ~/.local/share/ai-agent-local-memory/ ~/backup/ai-agent-local-memory-$(date +%Y%m%d)/
 ```
 
-Data directory contents:
-```
-~/.local/share/ai-agent-local-memory/
-├── graph.db          ← all nodes, edges, FTS index (single SQLite file)
-├── graph.db-wal      ← WAL journal (may not exist when idle)
-├── graph.db-shm      ← shared memory (may not exist when idle)
-├── episodes/         ← raw session JSON files
-└── backups/          ← created by neural_backup tool
-```
-
-For a consistent backup, ensure no active write operations are in progress. SQLite WAL mode guarantees that copying `graph.db` + `graph.db-wal` together is always consistent.
-
 ## Development
 
 ```bash
 bun install
-bun run --filter='*' build
-bun run --filter='*' test
+bun build packages/adapter-opencode/src/index.ts --outdir packages/adapter-opencode/dist --target bun --external @opencode-ai/plugin
+bun build packages/adapter-openclaw/src/index.ts --outdir packages/adapter-openclaw/dist --target node --external "openclaw" --external "bun:sqlite" --external "node:sqlite"
 ```
+
+### Cross-Runtime Compatibility
+
+The storage layer uses a sqlite-shim that automatically selects:
+- `bun:sqlite` when running under Bun (OpenCode)
+- `node:sqlite` (DatabaseSync) when running under Node.js (OpenClaw)
+
+No external native dependencies required on either runtime.
 
 ## Development Session
 
-The original design session for this project is in OpenCode. To resume:
-
+Original design session (OpenCode):
 ```bash
 opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
 ```
-
-Note: This session was started in `/Users/I027910/Projects/HanziZombieDefense` directory.
 
 ## License
 
