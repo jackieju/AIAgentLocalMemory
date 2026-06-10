@@ -1,4 +1,4 @@
-import { Database, type Statement } from 'bun:sqlite';
+import { Database, Statement } from './sqlite-shim.ts';
 import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -134,7 +134,6 @@ export class SqliteStorageProvider implements StorageProvider {
     mkdirSync(dirname(path), { recursive: true });
 
     const db = new Database(path, { create: true });
-    db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA foreign_keys = ON');
 
     db.exec(`
