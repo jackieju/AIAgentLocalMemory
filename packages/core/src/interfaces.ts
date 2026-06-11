@@ -104,6 +104,15 @@ export interface LLMProvider {
 }
 
 /**
+ * Embedding provider — injected by the host adapter.
+ * Used to compute semantic similarity between nodes.
+ */
+export interface EmbeddingProvider {
+  embed(texts: string[]): Promise<number[][]>;
+  dimensions: number;
+}
+
+/**
  * Storage provider — the persistence layer.
  * Default implementation: SQLite + FTS5.
  */
@@ -151,6 +160,7 @@ export interface NodeFilter {
 export interface EngineConfig {
   storage: StorageProvider;
   llm?: LLMProvider;
+  embedding?: EmbeddingProvider;
 
   learningRate?: number;
   decayRate?: number;
