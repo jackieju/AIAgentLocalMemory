@@ -129,6 +129,7 @@ Restart OpenCode.
 | `neural_expand` | Expand compressed/elided content back to full text |
 | `neural_import_history` | Import past OpenCode sessions into the neural graph |
 | `neural_backup` | Backup the entire memory graph to a timestamped directory |
+| `neural_sync` | Synchronize memory across machines via Git (init/push/pull/status) |
 | `neural_status` | View engine stats and working memory |
 
 ### OpenCode Configuration
@@ -324,6 +325,54 @@ Point both adapters to the same directory to share a single memory graph:
 ```
 
 SQLite WAL mode handles concurrent reads safely. Concurrent writes are rare and retried via busy timeout.
+
+## Distributed Sync (Multi-Machine)
+
+Synchronize memory across multiple machines using Git. Uses an append-only operation log — no conflicts possible.
+
+### How it works
+
+```
+Machine A writes → appends to operations.jsonl → git push
+Machine B: git pull → replay new operations → local graph updated
+```
+
+Each machine appends its own operations. Git merges are always clean (append-only, no overlapping lines). UUID node IDs prevent collisions across machines.
+
+### Setup
+
+**Machine 1 (first time):**
+```
+neural_sync(action="init", repoUrl="git@github.com:yourname/memory-sync.git")
+```
+
+**Machine 2 (join existing):**
+```
+neural_sync(action="init", repoUrl="git@github.com:yourname/memory-sync.git")
+neural_sync(action="pull")
+```
+
+### Daily Use
+
+```
+neural_sync(action="push")     → commit + push local operations
+neural_sync(action="pull")     → pull + replay remote operations
+neural_sync(action="status")   → check sync state
+```
+
+### Writes During Sync
+
+If new memories are created while syncing, they are safely appended to the operation log and included in the next push. No data loss is possible.
+
+### Architecture
+
+```
+graph.db (local runtime database — fast reads/writes)
+    ↑ replay
+operations.jsonl (append-only log — synced via Git)
+```
+
+The operation log is the source of truth for sync. `graph.db` is a materialized view that can be rebuilt from the log at any time.
 
 ## Backup
 
