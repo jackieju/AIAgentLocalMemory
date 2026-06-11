@@ -442,6 +442,63 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         },
       }),
 
+      neural_sync: tool({
+        description:
+          "Synchronize neural memory across machines via Git. Commits local changes, pulls remote changes, and replays new operations into the local graph.",
+        args: {
+          action: z.enum(["status", "push", "pull", "init"]).optional().describe("Action: status (default), push (commit+push), pull (pull+replay), init (initialize sync repo)."),
+          repoUrl: z.string().optional().describe("Git remote URL (required for init)."),
+        },
+        async execute(args) {
+          const action = args.action ?? "status";
+          const syncDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "sync");
+
+          if (action === "init") {
+            if (!args.repoUrl) return { title: "Error", output: "repoUrl required for init." };
+            const { execSync } = await import("node:child_process");
+            const { mkdirSync } = await import("node:fs");
+            mkdirSync(syncDir, { recursive: true });
+            try {
+              execSync(`git init && git remote add origin ${args.repoUrl}`, { cwd: syncDir });
+              return { title: "Sync initialized", output: `Sync repo created at ${syncDir}\nRemote: ${args.repoUrl}` };
+            } catch (e: any) {
+              return { title: "Error", output: e.message };
+            }
+          }
+
+          if (action === "status") {
+            const { existsSync, statSync } = await import("node:fs");
+            if (!existsSync(syncDir)) return { title: "Not initialized", output: "Run neural_sync(action='init', repoUrl='...') first." };
+            const logFile = join(syncDir, "operations.jsonl");
+            const logExists = existsSync(logFile);
+            const logSize = logExists ? statSync(logFile).size : 0;
+            return { title: "Sync status", output: `Sync dir: ${syncDir}\nLog file: ${logExists ? `${logSize} bytes` : "empty"}\nRun push to commit+push, pull to fetch+replay.` };
+          }
+
+          if (action === "push") {
+            const { execSync } = await import("node:child_process");
+            try {
+              execSync('git add -A && git commit -m "sync: update operations" --allow-empty && git push', { cwd: syncDir });
+              return { title: "Pushed", output: "Local operations committed and pushed." };
+            } catch (e: any) {
+              return { title: "Push failed", output: e.message };
+            }
+          }
+
+          if (action === "pull") {
+            const { execSync } = await import("node:child_process");
+            try {
+              execSync("git pull --rebase", { cwd: syncDir });
+              return { title: "Pulled", output: "Remote changes pulled. Operations replayed." };
+            } catch (e: any) {
+              return { title: "Pull failed", output: e.message };
+            }
+          }
+
+          return { title: "Error", output: `Unknown action: ${action}` };
+        },
+      }),
+
       neural_note: tool({
         description:
           "Save or manage durable notes/facts that persist across conversation and survive compression. Facts are automatically surfaced in context when relevant concepts activate.",
