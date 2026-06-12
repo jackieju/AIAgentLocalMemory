@@ -120,6 +120,10 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
   }
 }
 
-export const tui: TuiPlugin = async (api) => {
+const id = "ai-agent-local-memory"
+
+const tui: TuiPlugin = async (api) => {
   api.slots.register(createSidebarSlot(api))
 }
+
+export default { id, tui }
