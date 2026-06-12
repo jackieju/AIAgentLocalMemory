@@ -8,9 +8,12 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./tui": {
+      "import": "./src/tui/index.tsx"
     }
   },
-  "oc-plugin": ["server"],
+  "oc-plugin": ["server", "tui"],
   "scripts": {
     "build": "bun build src/index.ts --outdir dist --target node --format esm --external @opencode-ai/plugin && tsc --emitDeclarationOnly",
     "test": "bun test",
