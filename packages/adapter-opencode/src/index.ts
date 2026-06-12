@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory } from "@ai-agent-local-memory/core";
-import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker } from "@ai-agent-local-memory/core";
+import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
 
 interface PluginConfig {
@@ -14,6 +14,18 @@ interface PluginConfig {
   budgetRatio?: number;
   coexistWithMagicContext?: boolean;
   syncRepo?: string;
+  llm?: {
+    provider: "openai" | "ollama" | "custom";
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+  };
+  embedding?: {
+    provider: "openai" | "ollama" | "custom";
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+  };
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -105,8 +117,37 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const dataBase = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
   const episodesDir = join(dataBase, 'ai-agent-local-memory', 'episodes');
 
+  let llmProvider: LLMProvider | undefined;
+  let embeddingProvider: EmbeddingProvider | undefined;
+
+  if (pluginConfig.llm) {
+    const c = pluginConfig.llm;
+    if (c.provider === "ollama") {
+      llmProvider = new OllamaLLM({ model: c.model });
+    } else if (c.provider === "openai" || c.provider === "custom") {
+      llmProvider = new OpenAICompatibleLLM({
+        baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
+        apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
+        model: c.model,
+      });
+    }
+  }
+
+  if (pluginConfig.embedding) {
+    const c = pluginConfig.embedding;
+    if (c.provider === "ollama") {
+      embeddingProvider = new OllamaEmbedding({ model: c.model });
+    } else if (c.provider === "openai" || c.provider === "custom") {
+      embeddingProvider = new OpenAICompatibleEmbedding({
+        baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
+        apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
+        embeddingModel: c.model,
+      });
+    }
+  }
+
   try {
-    await engine.init({ storage, projectId: "global", episodesDir });
+    await engine.init({ storage, projectId: "global", episodesDir, llm: llmProvider, embedding: embeddingProvider });
   } catch (err) {
     console.error("[ai-agent-local-memory] init failed:", err);
     return {} as Hooks;
