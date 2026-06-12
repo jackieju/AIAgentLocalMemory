@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
 
@@ -112,10 +112,14 @@ function parseTagRanges(input: string): number[] {
 const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const sessionId = projectIdFromDir(directory);
   const pluginConfig = loadConfig(directory);
-  const storage = new SqliteStorageProvider();
+  const rawStorage = new SqliteStorageProvider();
   const engine = new NeuralContextEngine();
   const dataBase = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
   const episodesDir = join(dataBase, 'ai-agent-local-memory', 'episodes');
+  const syncDir = join(dataBase, 'ai-agent-local-memory', 'sync');
+
+  const opLog = new OperationLog(syncDir);
+  const storage = new LoggedStorageProvider(rawStorage, opLog);
 
   let llmProvider: LLMProvider | undefined;
   let embeddingProvider: EmbeddingProvider | undefined;
@@ -158,7 +162,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
   }
 
-  const syncDir = join(dataBase, "ai-agent-local-memory", "sync");
   if (pluginConfig.syncRepo && !existsSync(join(syncDir, ".git"))) {
     try {
       const { mkdirSync: mkSync } = await import("node:fs");
@@ -543,8 +546,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           if (action === "pull") {
             const { execSync } = await import("node:child_process");
             try {
-              execSync("git pull --rebase", { cwd: syncDir });
-              return { title: "Pulled", output: "Remote changes pulled. Operations replayed." };
+              execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
+              const result = await opLog.replay(storage);
+              return { title: "Pulled", output: `Remote changes pulled.\nApplied: ${result.applied} operations, Skipped: ${result.skipped} (own machine).` };
             } catch (e: any) {
               return { title: "Pull failed", output: e.message };
             }
