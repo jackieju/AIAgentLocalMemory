@@ -13,6 +13,7 @@ interface PluginConfig {
   contextWindowTokens?: number;
   budgetRatio?: number;
   coexistWithMagicContext?: boolean;
+  syncRepo?: string;
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -114,6 +115,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
     console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
+  }
+
+  const syncDir = join(dataBase, "ai-agent-local-memory", "sync");
+  if (pluginConfig.syncRepo && !existsSync(join(syncDir, ".git"))) {
+    try {
+      const { mkdirSync: mkSync } = await import("node:fs");
+      const { execSync } = await import("node:child_process");
+      mkSync(syncDir, { recursive: true });
+      execSync(`git init && git remote add origin ${pluginConfig.syncRepo}`, { cwd: syncDir, stdio: "ignore" });
+      console.log(`[ai-agent-local-memory] sync repo initialized: ${pluginConfig.syncRepo}`);
+    } catch {
+      console.warn("[ai-agent-local-memory] sync repo auto-init failed");
+    }
   }
 
   const renderConfig: ContextRenderConfig = {

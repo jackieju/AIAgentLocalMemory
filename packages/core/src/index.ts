@@ -17,3 +17,4 @@ export type { Operation } from "./operation-log.ts";
 export { LoggedStorageProvider } from "./logged-storage.ts";
 export { EdgeWeightPredictor } from "./edge-predictor.ts";
 export type { FeatureWeights, Features } from "./edge-predictor.ts";
+export * from "./providers/index.ts";
