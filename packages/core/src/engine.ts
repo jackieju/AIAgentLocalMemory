@@ -3,6 +3,7 @@ import type {
   EngineStats,
   INeuralContextEngine,
   LLMProvider,
+  EmbeddingProvider,
   MemoryNode,
   NodeType,
   RecallOptions,
@@ -14,6 +15,10 @@ import { NeuralGraph } from "./graph.ts";
 import { HebbianLearning } from "./hebbian.ts";
 import { WorkingMemory } from "./working-memory.ts";
 import { SessionAbstractor } from "./abstraction.ts";
+import { LightweightLinker } from "./lightweight-linker.ts";
+import { EmbeddingLinker } from "./embedding-linker.ts";
+import { LLMExtractor } from "./llm-extractor.ts";
+import { EdgeWeightPredictor } from "./edge-predictor.ts";
 import type { RecallIterator } from "./recall-iterator.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +26,7 @@ import { join } from "node:path";
 interface ResolvedConfig {
   storage: StorageProvider;
   llm?: LLMProvider;
+  embedding?: EmbeddingProvider;
   learningRate: number;
   decayRate: number;
   pruneThreshold: number;
@@ -68,12 +74,17 @@ export class NeuralContextEngine implements INeuralContextEngine {
   private hebbian!: HebbianLearning;
   private workingMemory!: WorkingMemory;
   private abstractor: SessionAbstractor | null = null;
+  private lightweightLinker!: LightweightLinker;
+  private embeddingLinker: EmbeddingLinker | null = null;
+  private llmExtractor: LLMExtractor | null = null;
+  private edgePredictor!: EdgeWeightPredictor;
   private nodeCache = new Map<string, MemoryNode>();
 
   async init(config: EngineConfig): Promise<void> {
     this.config = {
       storage: config.storage,
       llm: config.llm,
+      embedding: config.embedding,
       learningRate: config.learningRate ?? 0.1,
       decayRate: config.decayRate ?? 0.005,
       pruneThreshold: config.pruneThreshold ?? 0.01,
@@ -104,6 +115,14 @@ export class NeuralContextEngine implements INeuralContextEngine {
     });
     this.workingMemory = new WorkingMemory(this.config.workingMemorySize);
     this.abstractor = this.config.llm ? new SessionAbstractor(this.config.llm) : null;
+    this.lightweightLinker = new LightweightLinker(this.config.storage, this.config.maxEdgesPerNode);
+    this.edgePredictor = new EdgeWeightPredictor();
+    this.llmExtractor = this.config.llm ? new LLMExtractor(this.config.llm) : null;
+    this.embeddingLinker = this.config.embedding
+      ? new EmbeddingLinker(this.config.storage, this.config.embedding, {
+          maxEdgesPerNode: this.config.maxEdgesPerNode,
+        })
+      : null;
   }
 
   async shutdown(): Promise<void> {
@@ -141,6 +160,11 @@ export class NeuralContextEngine implements INeuralContextEngine {
       await this.graph.addNode(episode);
       this.nodeCache.set(episode.id, episode);
       this.workingMemory.access(episode.id);
+
+      await this.lightweightLinker.linkToExisting(episode);
+      if (this.embeddingLinker) {
+        try { await this.embeddingLinker.linkNode(episode); } catch {}
+      }
       return;
     }
 
@@ -151,10 +175,18 @@ export class NeuralContextEngine implements INeuralContextEngine {
       this.nodeCache.set(node.id, node);
     }
     for (const edge of edges) {
-      await this.graph.addEdge(edge);
+      const predictedWeight = this.edgePredictor.predict(
+        this.nodeCache.get(edge.src) ?? { id: edge.src, type: "concept", content: "", importance: 0.5, strength: 0.5, accessCount: 0, lastAccessed: now, createdAt: now },
+        this.nodeCache.get(edge.dst) ?? { id: edge.dst, type: "concept", content: "", importance: 0.5, strength: 0.5, accessCount: 0, lastAccessed: now, createdAt: now },
+      );
+      await this.graph.addEdge({ ...edge, weight: Math.max(edge.weight, predictedWeight) });
     }
     for (const node of nodes) {
       if (node.type === "concept") this.workingMemory.access(node.id);
+      await this.lightweightLinker.linkToExisting(node);
+      if (this.embeddingLinker) {
+        try { await this.embeddingLinker.linkNode(node); } catch {}
+      }
     }
   }
 
@@ -179,6 +211,12 @@ export class NeuralContextEngine implements INeuralContextEngine {
     await this.graph.addNode(node);
     this.nodeCache.set(node.id, node);
     this.workingMemory.access(node.id);
+
+    await this.lightweightLinker.linkToExisting(node);
+    if (this.embeddingLinker) {
+      try { await this.embeddingLinker.linkNode(node); } catch {}
+    }
+
     return node;
   }
 
