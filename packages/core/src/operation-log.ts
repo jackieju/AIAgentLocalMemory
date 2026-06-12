@@ -49,11 +49,14 @@ export class OperationLog {
   private readonly statePath: string;
   private lastReplayedTs: number = 0;
   private lastSyncTs: number = 0;
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
+  private pushDebounceMs: number;
 
-  constructor(logDir: string, machineId?: string) {
+  constructor(logDir: string, machineId?: string, options?: { pushDebounceMs?: number }) {
     this.machineId = machineId ?? hostname();
     this.logPath = join(logDir, "operations.jsonl");
     this.statePath = join(logDir, "sync-state.json");
+    this.pushDebounceMs = options?.pushDebounceMs ?? 10000;
     if (!existsSync(logDir)) {
       mkdirSync(logDir, { recursive: true });
     }
@@ -62,6 +65,23 @@ export class OperationLog {
 
   append(op: Operation): void {
     appendFileSync(this.logPath, JSON.stringify(op) + "\n");
+    this.schedulePush();
+  }
+
+  private schedulePush(): void {
+    if (this.pushTimer) clearTimeout(this.pushTimer);
+    this.pushTimer = setTimeout(() => {
+      this.pushTimer = null;
+      const logDir = dirname(this.logPath);
+      if (!existsSync(join(logDir, ".git"))) return;
+      try {
+        const { execSync } = require("node:child_process");
+        const status = execSync("git status --porcelain", { cwd: logDir, encoding: "utf-8" });
+        if (status.trim().length > 0) {
+          execSync('git add -A && git commit -m "sync: auto" && git push', { cwd: logDir, stdio: "ignore" });
+        }
+      } catch {}
+    }, this.pushDebounceMs);
   }
 
   getNewOperations(): Operation[] {
