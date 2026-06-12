@@ -141,7 +141,16 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
   "injectSystemPrompt": true,
   "contextWindowTokens": 128000,
   "budgetRatio": 0.6,
-  "coexistWithMagicContext": false
+  "coexistWithMagicContext": false,
+  "syncRepo": "git@github.com:yourname/memory-sync.git",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini"
+  },
+  "embedding": {
+    "provider": "openai",
+    "model": "text-embedding-3-small"
+  }
 }
 ```
 
@@ -151,6 +160,46 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
 | `contextWindowTokens` | `128000` | Context window size in tokens for budget calculation |
 | `budgetRatio` | `0.6` | Fraction of context window allocated to history |
 | `coexistWithMagicContext` | auto-detected | Force coexistence mode on/off |
+| `syncRepo` | — | Git remote URL for multi-machine sync (auto-initializes on startup) |
+| `llm.provider` | — | LLM provider: `"openai"`, `"ollama"`, or `"custom"` |
+| `llm.baseUrl` | `https://api.openai.com/v1` | API endpoint (for custom providers) |
+| `llm.apiKey` | `$OPENAI_API_KEY` | API key (or set via env var) |
+| `llm.model` | `gpt-4o-mini` | Model name |
+| `embedding.provider` | — | Embedding provider: `"openai"`, `"ollama"`, or `"custom"` |
+| `embedding.baseUrl` | `https://api.openai.com/v1` | API endpoint (for custom providers) |
+| `embedding.apiKey` | `$OPENAI_API_KEY` | API key (or set via env var) |
+| `embedding.model` | `text-embedding-3-small` | Model name |
+
+### LLM & Embedding Enhancement
+
+When providers are configured, the engine automatically enhances memory quality:
+
+| Module | Trigger | Effect |
+|---|---|---|
+| **LLMExtractor** | `llm` configured | High-quality concept/assertion extraction on ingest (vs regex) |
+| **EmbeddingLinker** | `embedding` configured | Semantic edges via cosine similarity (vs lexical overlap only) |
+| **EdgeWeightPredictor** | Always active | Multi-feature scoring improves edge weights |
+| **LightweightLinker** | Always active | Baseline regex entity + lexical edges (no external service needed) |
+
+Without providers configured, the system still works using LightweightLinker only.
+
+#### Provider Examples
+
+**OpenAI:**
+```json
+{ "llm": { "provider": "openai", "apiKey": "sk-...", "model": "gpt-4o-mini" } }
+```
+
+**Ollama (local):**
+```json
+{ "llm": { "provider": "ollama", "model": "llama3.2" },
+  "embedding": { "provider": "ollama", "model": "nomic-embed-text" } }
+```
+
+**Custom OpenAI-compatible endpoint:**
+```json
+{ "llm": { "provider": "custom", "baseUrl": "http://localhost:8080/v1", "model": "my-model" } }
+```
 
 ### Standalone Mode (replaces magic-context)
 
