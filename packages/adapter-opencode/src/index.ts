@@ -32,6 +32,7 @@ function loadConfig(directory: string): PluginConfig {
   const candidates = [
     join(directory, ".opencode", "neural-context.json"),
     join(directory, "neural-context.json"),
+    join(homedir(), ".config", "opencode", "neural-context.json"),
   ];
   for (const path of candidates) {
     if (existsSync(path)) {
