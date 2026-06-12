@@ -578,18 +578,36 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }
 
           if (action === "export") {
+            const { readFileSync: rfs, existsSync: ex } = await import("node:fs");
+            const logFile = join(syncDir, "operations.jsonl");
+            const existingIds = new Set<string>();
+            if (ex(logFile)) {
+              const lines = rfs(logFile, "utf-8").trim().split("\n").filter(Boolean);
+              for (const line of lines) {
+                try {
+                  const op = JSON.parse(line);
+                  if (op.op === "add_node" && op.data?.id) existingIds.add(op.data.id);
+                  if (op.op === "add_edge" && op.data) existingIds.add(`${op.data.src}|${op.data.dst}|${op.data.type}`);
+                } catch {}
+              }
+            }
+
             const allNodes = await storage.getAllNodes();
             const allEdges = await storage.getAllEdges();
             let exported = 0;
+            let skipped = 0;
             for (const node of allNodes) {
+              if (existingIds.has(node.id)) { skipped++; continue; }
               opLog.append({ ts: node.createdAt || Date.now(), machine: opLog.machineId, op: "add_node", data: node });
               exported++;
             }
             for (const edge of allEdges) {
+              const key = `${edge.src}|${edge.dst}|${edge.type}`;
+              if (existingIds.has(key)) { skipped++; continue; }
               opLog.append({ ts: edge.lastCoactivated || Date.now(), machine: opLog.machineId, op: "add_edge", data: edge });
               exported++;
             }
-            return { title: `Exported ${exported} operations`, output: `Backfilled ${allNodes.length} nodes + ${allEdges.length} edges into operations.jsonl.\nRun neural_sync(action='push') to upload.` };
+            return { title: `Exported ${exported} operations`, output: `Backfilled ${allNodes.length} nodes + ${allEdges.length} edges.\nNew: ${exported}, Skipped (already in log): ${skipped}.\nRun neural_sync(action='push') to upload.` };
           }
 
           return { title: "Error", output: `Unknown action: ${action}` };
