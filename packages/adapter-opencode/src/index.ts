@@ -179,11 +179,21 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     syncTimer = setInterval(async () => {
       try {
         const { execSync } = await import("node:child_process");
-        execSync('git add -A && git diff --cached --quiet || git commit -m "sync: auto" && git push', { cwd: syncDir, stdio: "ignore" });
+        const { statSync: ss } = await import("node:fs");
+        const logFile = join(syncDir, "operations.jsonl");
+        const hasChanges = (() => {
+          try {
+            const out = execSync("git status --porcelain", { cwd: syncDir, encoding: "utf-8" });
+            return out.trim().length > 0;
+          } catch { return false; }
+        })();
+        if (hasChanges) {
+          execSync('git add -A && git commit -m "sync: auto" && git push', { cwd: syncDir, stdio: "ignore" });
+        }
         execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
         await opLog.replay(storage);
       } catch {}
-    }, 5 * 60 * 1000);
+    }, 60 * 60 * 1000);
   }
 
   const renderConfig: ContextRenderConfig = {
