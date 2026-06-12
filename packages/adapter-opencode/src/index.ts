@@ -174,6 +174,18 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     }
   }
 
+  let syncTimer: ReturnType<typeof setInterval> | null = null;
+  if (existsSync(join(syncDir, ".git"))) {
+    syncTimer = setInterval(async () => {
+      try {
+        const { execSync } = await import("node:child_process");
+        execSync('git add -A && git diff --cached --quiet || git commit -m "sync: auto" && git push', { cwd: syncDir, stdio: "ignore" });
+        execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
+        await opLog.replay(storage);
+      } catch {}
+    }, 5 * 60 * 1000);
+  }
+
   const renderConfig: ContextRenderConfig = {
     contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
     budgetRatio: pluginConfig.budgetRatio ?? 0.6,
@@ -504,7 +516,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         description:
           "Synchronize neural memory across machines via Git. Commits local changes, pulls remote changes, and replays new operations into the local graph.",
         args: {
-          action: z.enum(["status", "push", "pull", "init"]).optional().describe("Action: status (default), push (commit+push), pull (pull+replay), init (initialize sync repo)."),
+          action: z.enum(["status", "push", "pull", "init", "export"]).optional().describe("Action: status (default), push (commit+push), pull (pull+replay), init (initialize sync repo), export (backfill existing memories into operation log)."),
           repoUrl: z.string().optional().describe("Git remote URL (required for init)."),
         },
         async execute(args) {
@@ -525,12 +537,13 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }
 
           if (action === "status") {
-            const { existsSync, statSync } = await import("node:fs");
-            if (!existsSync(syncDir)) return { title: "Not initialized", output: "Run neural_sync(action='init', repoUrl='...') first." };
+            const { existsSync: ex, statSync } = await import("node:fs");
+            if (!ex(syncDir)) return { title: "Not initialized", output: "Run neural_sync(action='init', repoUrl='...') first." };
             const logFile = join(syncDir, "operations.jsonl");
-            const logExists = existsSync(logFile);
+            const logExists = ex(logFile);
             const logSize = logExists ? statSync(logFile).size : 0;
-            return { title: "Sync status", output: `Sync dir: ${syncDir}\nLog file: ${logExists ? `${logSize} bytes` : "empty"}\nRun push to commit+push, pull to fetch+replay.` };
+            const pending = opLog.getPendingCount();
+            return { title: "Sync status", output: `Sync dir: ${syncDir}\nLog: ${logExists ? `${logSize} bytes` : "empty"}\nPending ops: ${pending}\nAuto-sync: every 5 min` };
           }
 
           if (action === "push") {
@@ -552,6 +565,21 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             } catch (e: any) {
               return { title: "Pull failed", output: e.message };
             }
+          }
+
+          if (action === "export") {
+            const allNodes = await storage.getAllNodes();
+            const allEdges = await storage.getAllEdges();
+            let exported = 0;
+            for (const node of allNodes) {
+              opLog.append({ ts: node.createdAt || Date.now(), machine: opLog.machineId, op: "add_node", data: node });
+              exported++;
+            }
+            for (const edge of allEdges) {
+              opLog.append({ ts: edge.lastCoactivated || Date.now(), machine: opLog.machineId, op: "add_edge", data: edge });
+              exported++;
+            }
+            return { title: `Exported ${exported} operations`, output: `Backfilled ${allNodes.length} nodes + ${allEdges.length} edges into operations.jsonl.\nRun neural_sync(action='push') to upload.` };
           }
 
           return { title: "Error", output: `Unknown action: ${action}` };
