@@ -712,6 +712,48 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           return { title: "Error", output: `Unknown action: ${action}` };
         },
       }),
+
+      neural_session_read: tool({
+        description: "Read messages from another OpenCode session. Use this when the user asks about something from a different session or you need context from past conversations.",
+        args: {
+          sessionId: z.string().optional().describe("Session ID to read (e.g. 'ses_abc123'). If omitted, lists recent sessions."),
+          limit: z.number().int().positive().optional().describe("Max messages to return (default: 20)."),
+        },
+        async execute(args) {
+          if (!client) {
+            return { title: "Error", output: "OpenCode client not available." };
+          }
+
+          if (!args.sessionId) {
+            const sessionsResult = await client.session.list();
+            if (!sessionsResult.data) return { title: "Error", output: "Failed to list sessions." };
+            const sessions = sessionsResult.data.slice(0, 20);
+            const list = sessions.map((s, i) => `${i + 1}. ${s.id} — "${s.title}" (${new Date(s.time.created * 1000).toLocaleDateString()})`).join("\n");
+            return { title: `${sessions.length} recent sessions`, output: list };
+          }
+
+          const msgsResult = await client.session.messages({ path: { id: args.sessionId }, query: { limit: args.limit ?? 20 } });
+          if (!msgsResult.data) return { title: "Error", output: `Failed to read session ${args.sessionId}.` };
+
+          const texts: string[] = [];
+          for (const msg of msgsResult.data) {
+            const role = msg.info.role;
+            for (const part of msg.parts) {
+              if (part.type === "text" && (part as { text?: string }).text) {
+                const text = (part as { text: string }).text;
+                texts.push(`[${role}] ${text.slice(0, 500)}${text.length > 500 ? "..." : ""}`);
+              }
+            }
+          }
+
+          if (texts.length === 0) return { title: "Empty", output: `No text messages found in session ${args.sessionId}.` };
+          return {
+            title: `${texts.length} messages from ${args.sessionId}`,
+            output: texts.join("\n\n"),
+            metadata: { sessionId: args.sessionId, messageCount: texts.length },
+          };
+        },
+      }),
     },
 
     "experimental.chat.messages.transform": magicContextPresent
@@ -788,6 +830,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
           "- `neural_pin` — Pin tagged content to always show at full fidelity.",
           "- `neural_expand` — Expand compressed/elided content back to full text.",
+          "",
+          "IMPORTANT: When you are unsure about user preferences, past decisions, project conventions, or anything discussed in previous sessions, ALWAYS call `neural_recall` first to check if relevant knowledge exists in memory. Do not guess — recall first, then act.",
+          "If the user asks about something from another session, use `neural_session_read` to look up that session's conversation directly.",
         ].join("\n");
 
         if (magicContextPresent || pluginConfig.injectSystemPrompt === false) {
