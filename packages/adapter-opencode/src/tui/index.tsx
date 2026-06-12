@@ -86,6 +86,7 @@ function formatLastSync(iso: string): string {
 
 function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
   return {
+    order: 200,
     slots: {
       sidebar_content: (props) => {
         const [stats, setStats] = createSignal<Stats>(getStats())
