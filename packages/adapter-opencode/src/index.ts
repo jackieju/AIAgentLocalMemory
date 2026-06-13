@@ -439,11 +439,38 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       }),
 
       neural_expand: tool({
-        description: "Expand elided/compressed conversation content back to full text. Use tag numbers from §N§ identifiers.",
+        description: "Expand compressed/elided content back to full text. Use tag numbers from §N§ identifiers, or expand a compartment by ordinal range (start, end).",
         args: {
-          tags: z.string().min(1).describe("Tag numbers to expand (e.g. '3-5', '1,2,9')."),
+          tags: z.string().optional().describe("Tag numbers to expand (e.g. '3-5', '1,2,9')."),
+          start: z.number().int().optional().describe("Start ordinal of compartment to expand."),
+          end: z.number().int().optional().describe("End ordinal of compartment to expand."),
         },
         async execute(args) {
+          if (args.start !== undefined && args.end !== undefined) {
+            try {
+              const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
+              if (!msgsResult.data) return { title: "Error", output: "Failed to read session messages." };
+              
+              const allMsgs = msgsResult.data;
+              const slice = allMsgs.slice(args.start, args.end + 1);
+              const texts: string[] = [];
+              for (const msg of slice) {
+                const role = msg.info.role;
+                const textParts = msg.parts.filter((p: any) => p.type === "text");
+                const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n");
+                if (content) texts.push(`[${role}] ${content}`);
+              }
+              if (texts.length === 0) return { title: "Empty", output: `No messages in range ${args.start}-${args.end}.` };
+              return {
+                title: `Expanded ${texts.length} messages (ordinal ${args.start}-${args.end})`,
+                output: texts.join("\n\n---\n\n"),
+              };
+            } catch (e: any) {
+              return { title: "Error", output: e.message };
+            }
+          }
+
+          if (!args.tags) return { title: "Error", output: "Provide tags or start+end range." };
           const tagNumbers = parseTagRanges(args.tags);
           const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
           const results: string[] = [];
