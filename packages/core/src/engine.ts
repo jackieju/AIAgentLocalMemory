@@ -284,7 +284,7 @@ export class NeuralContextEngine implements INeuralContextEngine {
               normB += emb[i] * emb[i];
             }
             const sim = Math.sqrt(normA) * Math.sqrt(normB) > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
-            if (sim > 0.5) scored.push({ node, sim });
+            if (sim > 0.35) scored.push({ node, sim });
           }
           scored.sort((a, b) => b.sim - a.sim);
           for (const { node, sim } of scored.slice(0, SEARCH_FALLBACK_LIMIT)) {

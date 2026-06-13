@@ -170,7 +170,7 @@ export class SqliteStorageProvider implements StorageProvider {
         content,
         content='nodes',
         content_rowid='rowid',
-        tokenize='porter unicode61'
+        tokenize='unicode61 remove_diacritics 2'
       );
 
       CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
