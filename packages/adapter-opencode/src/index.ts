@@ -906,7 +906,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }
         }
 
-        output.messages = rendered;
+        output.messages.length = 0;
+        for (const msg of rendered) output.messages.push(msg);
 
         historianTurnCount++;
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
