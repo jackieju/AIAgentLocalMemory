@@ -807,7 +807,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         output.messages = rendered;
 
         setTimeout(() => {
-          const lastMsgs = messages.slice(-4);
+          const lastMsgs = messages.slice(-2);
           for (const msg of lastMsgs) {
             const role = msg.info?.role;
             if (role !== "user" && role !== "assistant") continue;
@@ -815,12 +815,21 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
             if (content.length < 10) continue;
             turnCounter++;
-            engine.remember(content, "episode", {
+            const node = {
+              id: crypto.randomUUID(),
+              type: "episode" as const,
+              content: content.slice(0, 5000),
               importance: role === "user" ? 0.6 : 0.5,
-              metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content }, turnIndex: turnCounter } },
-            }).catch(() => {});
+              strength: 0.5,
+              accessCount: 0,
+              lastAccessed: Date.now(),
+              createdAt: Date.now(),
+              sourceSession: sessionId,
+              metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content.slice(0, 5000) }, turnIndex: turnCounter } },
+            };
+            storage.putNode(node).catch(() => {});
           }
-        }, 0);
+        }, 100);
       } catch (err) {
         appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] ERROR: ${err}\n`);
       }
