@@ -769,70 +769,10 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       : async (input, output) => {
       try {
         const messages = output.messages ?? [];
-        if (messages.length === 0) return;
-
-        const CHARS_PER_TOKEN = 4;
-        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.6);
-        const RECENT_FULL_COUNT = 8;
-        const F2_MAX_CHARS = 200;
-
-        let totalTokens = 0;
-        const rendered: Array<{ info: any; parts: any[] }> = [];
-
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const msg = messages[i];
-          const textParts = msg.parts.filter((p: any) => p.type === "text");
-          const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
-          const msgTokens = contentLen / CHARS_PER_TOKEN;
-
-          if (rendered.length < RECENT_FULL_COUNT) {
-            totalTokens += msgTokens;
-            rendered.unshift(msg);
-          } else if (totalTokens + msgTokens < CONTEXT_BUDGET) {
-            totalTokens += msgTokens;
-            rendered.unshift(msg);
-          } else {
-            const truncatedParts = textParts.map((p: any) => ({
-              ...p,
-              text: p.text ? p.text.slice(0, F2_MAX_CHARS) + (p.text.length > F2_MAX_CHARS ? "..." : "") : "",
-            }));
-            const truncTokens = F2_MAX_CHARS / CHARS_PER_TOKEN;
-            if (totalTokens + truncTokens < CONTEXT_BUDGET) {
-              totalTokens += truncTokens;
-              rendered.unshift({ info: msg.info, parts: truncatedParts });
-            }
-          }
+        if (messages.length > 50) {
+          output.messages = messages.slice(-50);
         }
-
-        output.messages = rendered;
-
-        setTimeout(() => {
-          const lastMsgs = messages.slice(-2);
-          for (const msg of lastMsgs) {
-            const role = msg.info?.role;
-            if (role !== "user" && role !== "assistant") continue;
-            const textParts = msg.parts.filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
-            if (content.length < 10) continue;
-            turnCounter++;
-            const node = {
-              id: crypto.randomUUID(),
-              type: "episode" as const,
-              content: content.slice(0, 5000),
-              importance: role === "user" ? 0.6 : 0.5,
-              strength: 0.5,
-              accessCount: 0,
-              lastAccessed: Date.now(),
-              createdAt: Date.now(),
-              sourceSession: sessionId,
-              metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content.slice(0, 5000) }, turnIndex: turnCounter } },
-            };
-            storage.putNode(node).catch(() => {});
-          }
-        }, 100);
-      } catch (err) {
-        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] ERROR: ${err}\n`);
-      }
+      } catch {}
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
