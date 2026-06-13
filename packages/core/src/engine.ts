@@ -268,6 +268,33 @@ export class NeuralContextEngine implements INeuralContextEngine {
       }
     }
 
+    if (ftsNodes.length === 0 && this.embeddingLinker) {
+      try {
+        const queryEmbedding = await this.config.embedding!.embed([query]);
+        if (queryEmbedding.length > 0) {
+          const allNodes = await this.config.storage.getAllNodes();
+          const scored: Array<{ node: MemoryNode; sim: number }> = [];
+          for (const node of allNodes) {
+            const emb = node.metadata?.embedding as number[] | undefined;
+            if (!emb) continue;
+            let dot = 0, normA = 0, normB = 0;
+            for (let i = 0; i < queryEmbedding[0].length && i < emb.length; i++) {
+              dot += queryEmbedding[0][i] * emb[i];
+              normA += queryEmbedding[0][i] * queryEmbedding[0][i];
+              normB += emb[i] * emb[i];
+            }
+            const sim = Math.sqrt(normA) * Math.sqrt(normB) > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
+            if (sim > 0.3) scored.push({ node, sim });
+          }
+          scored.sort((a, b) => b.sim - a.sim);
+          for (const { node, sim } of scored.slice(0, SEARCH_FALLBACK_LIMIT)) {
+            ftsScores.set(node.id, sim);
+            ftsNodes.push(node);
+          }
+        }
+      } catch {}
+    }
+
     if (ftsNodes.length === 0) return [];
 
     const spreadSeeds = ftsNodes.slice(0, SPREAD_SEED_LIMIT).map((n) => ({
