@@ -849,25 +849,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           "IMPORTANT: When you are unsure about user preferences, past decisions, project conventions, or anything discussed in previous sessions, ALWAYS call `neural_recall` first to check if relevant knowledge exists in memory. Do not guess — recall first, then act.",
           "If the user asks about something from another session, use `neural_session_read` to look up that session's conversation directly.",
         ].join("\n");
-
-        if (magicContextPresent || pluginConfig.injectSystemPrompt === false) {
-          output.system.push(usageGuide);
-          return;
-        }
-
-        const recent = output.system[output.system.length - 1];
-        if (recent && typeof recent === "string") {
-          const results = await engine.recall(recent, { maxResults: 5 });
-          if (results.length > 0) {
-            const memories = results.map((r) => `- [${r.node.type}] ${r.node.content}`).join("\n");
-            output.system.push(`## Relevant memories from neural context\n${memories}`);
-          }
-        }
-
         output.system.push(usageGuide);
-      } catch (err) {
-        console.error("[ai-agent-local-memory] system.transform failed:", err);
-      }
+      } catch {}
     },
   };
 };
