@@ -274,9 +274,11 @@ export class NeuralContextEngine implements INeuralContextEngine {
         if (queryEmbedding.length > 0) {
           const allNodes = await this.config.storage.getAllNodes();
           const scored: Array<{ node: MemoryNode; sim: number }> = [];
+          let nodesWithEmb = 0;
           for (const node of allNodes) {
             const emb = node.metadata?.embedding as number[] | undefined;
             if (!emb) continue;
+            nodesWithEmb++;
             let dot = 0, normA = 0, normB = 0;
             for (let i = 0; i < queryEmbedding[0].length && i < emb.length; i++) {
               dot += queryEmbedding[0][i] * emb[i];
@@ -287,6 +289,8 @@ export class NeuralContextEngine implements INeuralContextEngine {
             if (sim > 0.35) scored.push({ node, sim });
           }
           scored.sort((a, b) => b.sim - a.sim);
+          const { appendFileSync: afs } = require("node:fs");
+          afs("/tmp/neural-recall-debug.log", `[${new Date().toISOString()}] query="${query}" allNodes=${allNodes.length} withEmb=${nodesWithEmb} scored=${scored.length} ftsNodesBefore=${ftsNodes.length}\n`);
           for (const { node, sim } of scored.slice(0, SEARCH_FALLBACK_LIMIT)) {
             if (!ftsScores.has(node.id)) {
               ftsScores.set(node.id, sim);
@@ -296,7 +300,10 @@ export class NeuralContextEngine implements INeuralContextEngine {
             }
           }
         }
-      } catch {}
+      } catch (e: unknown) {
+        const { appendFileSync: afs } = require("node:fs");
+        afs("/tmp/neural-recall-debug.log", `[${new Date().toISOString()}] EMBEDDING ERROR: ${e}\n`);
+      }
     }
 
     if (ftsNodes.length === 0) return [];

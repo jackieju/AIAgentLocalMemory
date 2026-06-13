@@ -97,12 +97,12 @@ function rowToEdge(row: EdgeRow): Synapse {
 }
 
 function escapeFtsQuery(query: string): string {
-  return query
+  const tokens = query
     .replace(/"/g, '')
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => `"${word}"`)
-    .join(' OR ');
+    .split(/[\s\p{P}]+/u)
+    .filter((w) => w.length > 0);
+  if (tokens.length === 0) return '';
+  return tokens.map((word) => `"${word}"`).join(' OR ');
 }
 
 export class SqliteStorageProvider implements StorageProvider {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
@@ -158,8 +158,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     return {} as Hooks;
   }
 
-  const { writeFileSync: writeDiag } = await import("node:fs");
-  writeDiag("/tmp/neural-plugin-init.log", JSON.stringify({
+  writeFileSync("/tmp/neural-plugin-init.log", JSON.stringify({
     ts: new Date().toISOString(),
     hasEmbedding: !!embeddingProvider,
     hasLlm: !!llmProvider,
@@ -769,69 +768,61 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       ? undefined
       : async (input, output) => {
       try {
-        const { appendFileSync: appendDiag } = await import("node:fs");
-        appendDiag("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] transform called, msgs=${output.messages?.length ?? 0}\n`);
         const messages = output.messages ?? [];
-        const seeds: Array<{nodeId: string; baseScore: number}> = [];
+        if (messages.length === 0) return;
 
-        for (const msg of messages) {
-          const msgInfo = msg.info;
+        const CHARS_PER_TOKEN = 4;
+        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.6);
+        const RECENT_FULL_COUNT = 8;
+        const F2_MAX_CHARS = 200;
+
+        let totalTokens = 0;
+        const rendered: Array<{ info: any; parts: any[] }> = [];
+
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i];
           const textParts = msg.parts.filter((p: any) => p.type === "text");
-          const content = textParts.map((p: any) => p.text ?? "").join("\n");
-          if (!content || content.length < 5) continue;
-          const role = msgInfo.role as "user" | "assistant";
-          if (role !== "user" && role !== "assistant") continue;
+          const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
+          const msgTokens = contentLen / CHARS_PER_TOKEN;
 
-          const existingNodes = await storage.queryNodes({
-            type: "episode",
-            sourceSession: sessionId,
-          });
-
-          const alreadyStored = existingNodes.some(
-            (n) => n.content === content && (n.metadata?.episodicData as Record<string, unknown>)?.role === role,
-          );
-
-          if (!alreadyStored) {
-            turnCounter++;
-            const episodicData: EpisodicData = {
-              role,
-              tag: turnCounter,
-              fidelity: { f0: content },
-              turnIndex: turnCounter,
-            };
-            await engine.remember(content, "episode", {
-              importance: role === "user" ? 0.6 : 0.5,
-              metadata: { episodicData },
-            });
-          }
-        }
-
-        const lastUserMsg = [...messages].reverse().find((m) => m.info.role === "user");
-        if (lastUserMsg) {
-          const lastContent = lastUserMsg.parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join(" ");
-          if (lastContent) {
-            const tokens = lastContent.toLowerCase().split(/\s+/).filter(Boolean);
-            const matchingNodes = await storage.search(tokens.slice(0, 5).join(" "), 5);
-            for (const node of matchingNodes) {
-              if (node.type === "concept" || node.type === "assertion") {
-                seeds.push({ nodeId: node.id, baseScore: 0.5 });
-              }
+          if (rendered.length < RECENT_FULL_COUNT) {
+            totalTokens += msgTokens;
+            rendered.unshift(msg);
+          } else if (totalTokens + msgTokens < CONTEXT_BUDGET) {
+            totalTokens += msgTokens;
+            rendered.unshift(msg);
+          } else {
+            const truncatedParts = textParts.map((p: any) => ({
+              ...p,
+              text: p.text ? p.text.slice(0, F2_MAX_CHARS) + (p.text.length > F2_MAX_CHARS ? "..." : "") : "",
+            }));
+            const truncTokens = F2_MAX_CHARS / CHARS_PER_TOKEN;
+            if (totalTokens + truncTokens < CONTEXT_BUDGET) {
+              totalTokens += truncTokens;
+              rendered.unshift({ info: msg.info, parts: truncatedParts });
             }
           }
         }
 
-        const renderResult = await renderer.render(sessionId, seeds);
+        output.messages = rendered;
 
-        output.messages = renderResult.messages.map((rm) => ({
-          role: rm.role,
-          content: rm.content,
-        }));
-
-        if (renderResult.systemInjection) {
-          output.system = [renderResult.systemInjection];
-        }
+        setTimeout(() => {
+          const lastMsgs = messages.slice(-4);
+          for (const msg of lastMsgs) {
+            const role = msg.info?.role;
+            if (role !== "user" && role !== "assistant") continue;
+            const textParts = msg.parts.filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
+            if (content.length < 10) continue;
+            turnCounter++;
+            engine.remember(content, "episode", {
+              importance: role === "user" ? 0.6 : 0.5,
+              metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content }, turnIndex: turnCounter } },
+            }).catch(() => {});
+          }
+        }, 0);
       } catch (err) {
-        console.error("[ai-agent-local-memory] messages.transform failed:", err);
+        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] ERROR: ${err}\n`);
       }
     },
 
