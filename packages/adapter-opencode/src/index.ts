@@ -266,6 +266,36 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     budgetRatio: pluginConfig.budgetRatio ?? 0.6,
   };
 
+  setTimeout(async () => {
+    try {
+      const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
+      const storedCount = episodes.length;
+      const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
+      if (!msgsResult.data) return;
+      const totalMsgs = msgsResult.data.length;
+      if (totalMsgs <= storedCount) return;
+      const gap = msgsResult.data.slice(storedCount, totalMsgs - 2);
+      for (const msg of gap) {
+        const role = msg.info.role;
+        if (role !== "user" && role !== "assistant") continue;
+        const textParts = msg.parts.filter((p: any) => p.type === "text");
+        const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+        if (content.length < 10) continue;
+        await storage.putNode({
+          id: crypto.randomUUID(),
+          type: "episode",
+          content: content.slice(0, 5000),
+          importance: role === "user" ? 0.6 : 0.5,
+          strength: 0.5,
+          accessCount: 0,
+          lastAccessed: Date.now(),
+          createdAt: Date.now(),
+          sourceSession: sessionId,
+        });
+      }
+    } catch {}
+  }, 5000);
+
   const graph = new NeuralGraph(storage);
   const workingMemory = new WorkingMemory();
   const renderer = new ContextRenderer(graph, workingMemory, storage, renderConfig);

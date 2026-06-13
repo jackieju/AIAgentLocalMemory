@@ -85,6 +85,23 @@ Long conversations are automatically compressed to stay within the context windo
 
 **Result**: Infinite session support — context never overflows, old conversations are preserved as summaries, and original text is always retrievable on demand.
 
+### Viewing Original Conversation History
+
+When conversations are compressed into compartments, you can always retrieve the original text:
+
+**Just ask naturally:**
+- "展开前面那段摘要"
+- "让我看看之前讨论 X 的原文"
+- "show me the full text of that compressed section"
+- "expand the earlier conversation about Y"
+
+The LLM sees compartments with ordinal markers (`<compartment start="5" end="10">`) and automatically calls `neural_expand(start=5, end=10)` to fetch the original messages from OpenCode's database.
+
+**Direct tool usage:**
+- `neural_expand(start=5, end=10)` — expand a compartment by ordinal range
+- `neural_expand(tags="3-5")` — expand by tag number
+- `neural_session_read(sessionId="ses_xxx")` — read messages from any session
+
 ### Working Memory
 LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01 × hours_since_access)`. Lowest-score items evicted when full.
 
