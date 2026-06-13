@@ -6,7 +6,7 @@ import { Tokenizer } from "ai-tokenizer";
 import * as claude_encoding from "ai-tokenizer/encoding/claude";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider, Compartment } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 
@@ -923,6 +923,35 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             } catch {}
           }, 50);
         }
+
+        setTimeout(async () => {
+          try {
+            const linker = new LightweightLinker(rawStorage);
+            const lastMsgs = messages.slice(-3);
+            for (const msg of lastMsgs) {
+              const role = msg.info?.role;
+              if (role !== "user" && role !== "assistant") continue;
+              const textParts = msg.parts.filter((p: any) => p.type === "text");
+              const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
+              if (content.length < 10) continue;
+              turnCounter++;
+              const node = {
+                id: crypto.randomUUID(),
+                type: "episode" as const,
+                content: content.slice(0, 5000),
+                importance: role === "user" ? 0.6 : 0.5,
+                strength: 0.5,
+                accessCount: 0,
+                lastAccessed: Date.now(),
+                createdAt: Date.now(),
+                sourceSession: sessionId,
+                metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content.slice(0, 5000) }, turnIndex: turnCounter } },
+              };
+              await storage.putNode(node);
+              await linker.linkToExisting(node);
+            }
+          } catch {}
+        }, 200);
 
         const afterTokens = Math.round(totalTokens);
         const beforeTokens = Math.round(messages.reduce((s: number, m: any) => {
