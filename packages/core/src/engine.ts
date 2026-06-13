@@ -268,9 +268,9 @@ export class NeuralContextEngine implements INeuralContextEngine {
       }
     }
 
-    if (ftsNodes.length === 0 && this.embeddingLinker) {
+    if (this.embeddingLinker && this.config.embedding) {
       try {
-        const queryEmbedding = await this.config.embedding!.embed([query]);
+        const queryEmbedding = await this.config.embedding.embed([query]);
         if (queryEmbedding.length > 0) {
           const allNodes = await this.config.storage.getAllNodes();
           const scored: Array<{ node: MemoryNode; sim: number }> = [];
@@ -284,12 +284,16 @@ export class NeuralContextEngine implements INeuralContextEngine {
               normB += emb[i] * emb[i];
             }
             const sim = Math.sqrt(normA) * Math.sqrt(normB) > 0 ? dot / (Math.sqrt(normA) * Math.sqrt(normB)) : 0;
-            if (sim > 0.3) scored.push({ node, sim });
+            if (sim > 0.5) scored.push({ node, sim });
           }
           scored.sort((a, b) => b.sim - a.sim);
           for (const { node, sim } of scored.slice(0, SEARCH_FALLBACK_LIMIT)) {
-            ftsScores.set(node.id, sim);
-            ftsNodes.push(node);
+            if (!ftsScores.has(node.id)) {
+              ftsScores.set(node.id, sim);
+              ftsNodes.push(node);
+            } else {
+              ftsScores.set(node.id, Math.max(ftsScores.get(node.id)!, sim));
+            }
           }
         }
       } catch {}
