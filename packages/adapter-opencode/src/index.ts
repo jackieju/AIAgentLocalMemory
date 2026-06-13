@@ -864,15 +864,12 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             return { role: m.info.role as string, content, ord: idx };
           });
-          try {
-            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000));
-            const result = await Promise.race([(historian as any).compress(sessionId, windowMsgs), timeoutPromise]);
-            if (result) {
-              compartmentStore.save(result);
-              compartments = compartmentStore.getForSession(sessionId);
-              maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
-            }
-          } catch {}
+          setTimeout(async () => {
+            try {
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) compartmentStore.save(result);
+            } catch {}
+          }, 50);
         }
 
         let totalTokens = 0;
@@ -909,6 +906,21 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           rendered.unshift({
             info: { role: "user" },
             parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}">\n${text}\n</compartment>\n</session-history>` }],
+          });
+        }
+
+        if (compartments.length === 0 && messages.length > RECENT_FULL_COUNT) {
+          const olderCount = messages.length - RECENT_FULL_COUNT;
+          const sampleMsgs = messages.slice(0, Math.min(10, olderCount));
+          const summary = sampleMsgs.map((m: any) => {
+            const role = m.info?.role ?? "?";
+            const textParts = m.parts.filter((p: any) => p.type === "text");
+            const text = textParts.map((p: any) => p.text ?? "").join(" ").slice(0, 80);
+            return `[${role}] ${text}...`;
+          }).join("\n");
+          rendered.unshift({
+            info: { role: "user" },
+            parts: [{ type: "text", text: `<session-history>\n[${olderCount} earlier messages being compressed by historian...]\n${summary}\n</session-history>` }],
           });
         }
 
