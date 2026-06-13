@@ -182,6 +182,26 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     directory,
   }, null, 2));
 
+  if (historian) {
+    const existingCompartments = compartmentStore.getForSession(sessionId);
+    if (existingCompartments.length === 0) {
+      try {
+        const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
+        if (msgsResult.data && msgsResult.data.length > 20) {
+          const chunkSize = Math.min(12, msgsResult.data.length - 20);
+          const windowMsgs = msgsResult.data.slice(0, chunkSize).map((m: any, idx: number) => {
+            const textParts = m.parts.filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => (p as {text?: string}).text ?? "").join("\n").slice(0, 1000);
+            return { role: m.info.role as string, content, ord: idx };
+          });
+          const timeout = new Promise<null>((r) => setTimeout(() => r(null), 10000));
+          const result = await Promise.race([(historian as any).compress(sessionId, windowMsgs), timeout]);
+          if (result) compartmentStore.save(result);
+        }
+      } catch {}
+    }
+  }
+
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
     console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
@@ -856,21 +876,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         let compartments = compartmentStore.getForSession(sessionId);
         let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
-
-        if (compartments.length === 0 && messages.length > RECENT_FULL_COUNT && historian) {
-          const chunkSize = Math.min(12, messages.length - RECENT_FULL_COUNT);
-          const windowMsgs = messages.slice(0, chunkSize).map((m: any, idx: number) => {
-            const textParts = m.parts.filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: m.info.role as string, content, ord: idx };
-          });
-          setTimeout(async () => {
-            try {
-              const result = await (historian as any).compress(sessionId, windowMsgs);
-              if (result) compartmentStore.save(result);
-            } catch {}
-          }, 50);
-        }
 
         for (let ci = 0; ci < compartments.length; ci++) {
           const c = compartments[ci];
