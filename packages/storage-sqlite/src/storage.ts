@@ -185,11 +185,15 @@ export class SqliteStorageProvider implements StorageProvider {
       db.exec(`DROP TRIGGER IF EXISTS nodes_ad`);
       db.exec(`DROP TRIGGER IF EXISTS nodes_au`);
       db.exec(`CREATE VIRTUAL TABLE nodes_fts USING fts5(content, tokenize='unicode61 remove_diacritics 2')`);
-      const rows = db.prepare(`SELECT rowid, content FROM nodes`).all() as Array<{ rowid: number; content: string }>;
-      const insertFts = db.prepare(`INSERT INTO nodes_fts(rowid, content) VALUES (?, ?)`);
-      for (const row of rows) {
-        insertFts.run(row.rowid, segmentText(row.content).join(' '));
-      }
+      setTimeout(() => {
+        try {
+          const rows = db.prepare(`SELECT rowid, content FROM nodes`).all() as Array<{ rowid: number; content: string }>;
+          const insertFts = db.prepare(`INSERT OR IGNORE INTO nodes_fts(rowid, content) VALUES (?, ?)`);
+          for (const row of rows) {
+            insertFts.run(row.rowid, segmentText(row.content.slice(0, 2000)).join(' '));
+          }
+        } catch {}
+      }, 10000);
     }
 
     this.db = db;
