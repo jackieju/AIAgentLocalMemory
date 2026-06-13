@@ -473,4 +473,8 @@ export class SqliteStorageProvider implements StorageProvider {
     if (!this.db) throw new Error('SqliteStorageProvider: database is not open');
     return this.db;
   }
+
+  getDb(): Database {
+    return this.requireDb();
+  }
 }

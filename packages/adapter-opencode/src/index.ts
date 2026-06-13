@@ -4,9 +4,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider } from "@ai-agent-local-memory/core";
-import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
-import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian } from "@ai-agent-local-memory/core";
+import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider, Compartment } from "@ai-agent-local-memory/core";
+import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 
 interface PluginConfig {
   injectSystemPrompt?: boolean;
@@ -157,6 +157,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     console.error("[ai-agent-local-memory] init failed:", err);
     return {} as Hooks;
   }
+
+  const compartmentStore = new CompartmentStore(rawStorage.getDb());
+  const historian = embeddingProvider || llmProvider
+    ? new Historian({
+        llm: llmProvider ?? new OpenAICompatibleLLM({
+          baseUrl: pluginConfig.embedding?.baseUrl ?? "http://localhost:6655/openai/v1",
+          apiKey: pluginConfig.embedding?.apiKey ?? process.env.OPENAI_API_KEY,
+          model: "claude-sonnet-4-20250514",
+          maxTokens: 400,
+        }),
+      })
+    : null;
+  let historianTurnCount = 0;
 
   const SERVER_BUILD = "__BUILD_NUMBER__";
   writeFileSync("/tmp/neural-server-build.txt", SERVER_BUILD);
@@ -778,52 +791,84 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const CHARS_PER_TOKEN = 4;
         const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.4);
         const RECENT_FULL_COUNT = 5;
-        const MAX_MESSAGES = 60;
+        const MIN_HISTORIAN_WINDOW = 6;
+        const HISTORIAN_CADENCE = 6;
+
+        const compartments = compartmentStore.getForSession(sessionId);
+        const maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
 
         let totalTokens = 0;
-        const rendered: Array<{ info: any; parts: any[] }> = [];
+        const rendered: Array<any> = [];
 
-        for (let i = messages.length - 1; i >= 0; i--) {
-          const msg = messages[i];
+        const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
+        for (const msg of recentMsgs) {
+          const textParts = msg.parts.filter((p: any) => p.type === "text");
+          const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
+          totalTokens += contentLen / CHARS_PER_TOKEN;
+          rendered.push(msg);
+        }
+
+        for (let i = compartments.length - 1; i >= 0; i--) {
+          const c = compartments[i];
+          const p1Tokens = c.p1.length / CHARS_PER_TOKEN;
+          const p2Tokens = c.p2.length / CHARS_PER_TOKEN;
+          const p3Tokens = c.p3.length / CHARS_PER_TOKEN;
+
+          let text: string;
+          if (totalTokens + p1Tokens < CONTEXT_BUDGET) {
+            text = c.p1;
+            totalTokens += p1Tokens;
+          } else if (totalTokens + p2Tokens < CONTEXT_BUDGET) {
+            text = c.p2;
+            totalTokens += p2Tokens;
+          } else if (totalTokens + p3Tokens < CONTEXT_BUDGET) {
+            text = c.p3;
+            totalTokens += p3Tokens;
+          } else {
+            break;
+          }
+
+          rendered.unshift({
+            info: { role: "user" },
+            parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}">\n${text}\n</compartment>\n</session-history>` }],
+          });
+        }
+
+        const olderMsgs = messages.slice(RECENT_FULL_COUNT > messages.length ? 0 : 0, messages.length - RECENT_FULL_COUNT);
+        const uncompartmentalizedOlder = olderMsgs.filter((_, idx) => idx > maxCompartOrd);
+        for (let i = uncompartmentalizedOlder.length - 1; i >= 0; i--) {
+          const msg = uncompartmentalizedOlder[i];
           const textParts = msg.parts.filter((p: any) => p.type === "text");
           const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
           const msgTokens = contentLen / CHARS_PER_TOKEN;
-
-          if (rendered.length < RECENT_FULL_COUNT) {
+          if (totalTokens + msgTokens < CONTEXT_BUDGET) {
             totalTokens += msgTokens;
-            rendered.unshift(msg);
-          } else if (totalTokens + msgTokens < CONTEXT_BUDGET) {
-            totalTokens += msgTokens;
-            rendered.unshift(msg);
+            rendered.splice(compartments.length > 0 ? 1 : 0, 0, msg);
           }
         }
 
-        output.messages = rendered.length > MAX_MESSAGES ? rendered.slice(-MAX_MESSAGES) : rendered;
-        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length} tokens=${Math.round(totalTokens)}\n`);
+        output.messages = rendered;
 
-        setTimeout(() => {
-          const lastMsgs = messages.slice(-2);
-          for (const msg of lastMsgs) {
-            const role = msg.info?.role;
-            if (role !== "user" && role !== "assistant") continue;
-            const textParts = msg.parts.filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
-            if (content.length < 10) continue;
-            turnCounter++;
-            storage.putNode({
-              id: crypto.randomUUID(),
-              type: "episode" as const,
-              content: content.slice(0, 5000),
-              importance: role === "user" ? 0.6 : 0.5,
-              strength: 0.5,
-              accessCount: 0,
-              lastAccessed: Date.now(),
-              createdAt: Date.now(),
-              sourceSession: sessionId,
-              metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content.slice(0, 5000) }, turnIndex: turnCounter } },
-            }).catch(() => {});
-          }
-        }, 100);
+        historianTurnCount++;
+        const uncompartmentalizedCount = messages.length - RECENT_FULL_COUNT - (maxCompartOrd + 1);
+        if (historian && uncompartmentalizedCount >= MIN_HISTORIAN_WINDOW && 
+            (historianTurnCount % HISTORIAN_CADENCE === 0 || totalTokens > CONTEXT_BUDGET * 0.8)) {
+          const startOrd = maxCompartOrd + 1;
+          const windowMsgs = messages.slice(startOrd, startOrd + 10).map((m: any, idx: number) => {
+            const textParts = m.parts.filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+            return { role: m.info.role as string, content, ord: startOrd + idx };
+          });
+          
+          setTimeout(async () => {
+            try {
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) compartmentStore.save(result);
+            } catch {}
+          }, 50);
+        }
+
+        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length} tokens=${Math.round(totalTokens)} compartments=${compartments.length}\n`);
       } catch {}
     },
 
