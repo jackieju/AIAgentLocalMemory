@@ -10,7 +10,7 @@ import { Database } from "bun:sqlite"
 const VERSION = "0.4.1"
 const BUILD_NUMBER = (() => {
   try {
-    const bnPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/BUILD_NUMBER")
+    const bnPath = "/tmp/neural-server-build.txt"
     if (existsSync(bnPath)) return readFileSync(bnPath, "utf-8").trim()
   } catch {}
   return "?"

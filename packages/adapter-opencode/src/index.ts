@@ -165,6 +165,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     configLoaded: !!pluginConfig.embedding,
     directory,
   }, null, 2));
+  writeFileSync("/tmp/neural-server-build.txt", readFileSync(join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/BUILD_NUMBER"), "utf-8").trim());
 
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
@@ -764,16 +765,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       }),
     },
 
-    "experimental.chat.messages.transform": magicContextPresent
-      ? undefined
-      : async (input, output) => {
-      try {
-        const messages = output.messages ?? [];
-        if (messages.length > 50) {
-          output.messages = messages.slice(-50);
-        }
-      } catch {}
-    },
+    "experimental.chat.messages.transform": undefined,
 
     "experimental.chat.system.transform": async (_input, output) => {
       try {
