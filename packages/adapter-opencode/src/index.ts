@@ -778,8 +778,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const CHARS_PER_TOKEN = 4;
         const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.4);
         const RECENT_FULL_COUNT = 5;
-        const F2_MAX_CHARS = 150;
-        const MAX_MESSAGES = 100;
+        const MAX_MESSAGES = 60;
 
         let totalTokens = 0;
         const rendered: Array<{ info: any; parts: any[] }> = [];
@@ -796,21 +795,11 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           } else if (totalTokens + msgTokens < CONTEXT_BUDGET) {
             totalTokens += msgTokens;
             rendered.unshift(msg);
-          } else {
-            const truncatedParts = textParts.map((p: any) => ({
-              ...p,
-              text: p.text ? p.text.slice(0, F2_MAX_CHARS) + (p.text.length > F2_MAX_CHARS ? "..." : "") : "",
-            }));
-            const truncTokens = F2_MAX_CHARS / CHARS_PER_TOKEN;
-            if (totalTokens + truncTokens < CONTEXT_BUDGET) {
-              totalTokens += truncTokens;
-              rendered.unshift({ info: msg.info, parts: truncatedParts });
-            }
           }
         }
 
         output.messages = rendered.length > MAX_MESSAGES ? rendered.slice(-MAX_MESSAGES) : rendered;
-        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length}\n`);
+        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length} tokens=${Math.round(totalTokens)}\n`);
 
         setTimeout(() => {
           const lastMsgs = messages.slice(-2);
