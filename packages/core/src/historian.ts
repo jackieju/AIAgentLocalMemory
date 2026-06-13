@@ -14,6 +14,7 @@ export interface Compartment {
 
 export interface HistorianConfig {
   llm: LLMProvider;
+  fallbackModels?: string[];
   minWindow?: number;
   maxWindow?: number;
 }
@@ -34,13 +35,14 @@ p3: A title (≤8 tokens). Like a git commit subject.
 Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.`;
 
 export class Historian {
-  private config: Required<HistorianConfig>;
+  private config: { llm: LLMProvider; fallbackModels: string[]; minWindow: number; maxWindow: number };
   private running = new Set<string>();
   private queue = new Map<string, { messages: HistorianMessage[] }>();
 
   constructor(config: HistorianConfig) {
     this.config = {
       llm: config.llm,
+      fallbackModels: config.fallbackModels ?? [],
       minWindow: config.minWindow ?? 6,
       maxWindow: config.maxWindow ?? 12,
     };
@@ -72,16 +74,19 @@ export class Historian {
     if (window.length < this.config.minWindow) return null;
 
     const transcript = window.map(m => `[${m.role}]: ${m.content.slice(0, 1000)}`).join("\n\n");
+    const prompt = `${HISTORIAN_PROMPT}\n\nCONVERSATION:\n${transcript}\n\nJSON:`;
 
-    let response: string;
-    try {
-      response = await this.config.llm.complete(
-        `${HISTORIAN_PROMPT}\n\nCONVERSATION:\n${transcript}\n\nJSON:`,
-        { maxTokens: 300 }
-      );
-    } catch {
-      return null;
+    let response: string | null = null;
+    const modelsToTry = [undefined, ...this.config.fallbackModels];
+    for (const model of modelsToTry) {
+      try {
+        response = await this.config.llm.complete(prompt, { model, maxTokens: 300 });
+        if (response) break;
+      } catch {
+        continue;
+      }
     }
+    if (!response) return null;
 
     try {
       const jsonMatch = response.match(/\{[\s\S]*\}/);

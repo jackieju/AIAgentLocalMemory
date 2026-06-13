@@ -161,15 +161,15 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }
 
   const compartmentStore = new CompartmentStore(rawStorage.getDb());
-  const historian = embeddingProvider || llmProvider
-    ? new Historian({
-        llm: llmProvider ?? new OpenAICompatibleLLM({
-          baseUrl: pluginConfig.embedding?.baseUrl ?? "http://localhost:6655/openai/v1",
-          apiKey: pluginConfig.embedding?.apiKey ?? process.env.OPENAI_API_KEY,
-          model: "claude-sonnet-4-6",
-          maxTokens: 400,
-        }),
-      })
+  const historianModels = ["claude-sonnet-4-6", "gpt-4.1-mini", "gpt-5-mini"];
+  const historianLlm = llmProvider ?? new OpenAICompatibleLLM({
+    baseUrl: pluginConfig.embedding?.baseUrl ?? pluginConfig.llm?.baseUrl ?? "http://localhost:6655/openai/v1",
+    apiKey: pluginConfig.embedding?.apiKey ?? pluginConfig.llm?.apiKey ?? process.env.OPENAI_API_KEY,
+    model: historianModels[0],
+    maxTokens: 400,
+  });
+  const historian = (embeddingProvider || llmProvider || pluginConfig.embedding || pluginConfig.llm)
+    ? new Historian({ llm: historianLlm, fallbackModels: historianModels.slice(1) })
     : null;
   let historianTurnCount = 0;
 
