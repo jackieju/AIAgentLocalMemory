@@ -11,7 +11,11 @@ const VERSION = "0.4.1"
 const BUILD_NUMBER = (() => {
   try {
     const bnPath = "/tmp/neural-server-build.txt"
-    if (existsSync(bnPath)) return readFileSync(bnPath, "utf-8").trim()
+    if (existsSync(bnPath)) {
+      const mtime = statSync(bnPath).mtime.getTime()
+      if (Date.now() - mtime > 5 * 60 * 1000) return "?"
+      return readFileSync(bnPath, "utf-8").trim()
+    }
   } catch {}
   return "?"
 })()
