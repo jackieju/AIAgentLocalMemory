@@ -177,6 +177,21 @@ export class SqliteStorageProvider implements StorageProvider {
       );
     `);
 
+    const ftsInfo = db.prepare(`SELECT sql FROM sqlite_master WHERE name = 'nodes_fts'`).get() as { sql: string } | null;
+    const needsRebuild = ftsInfo?.sql?.includes("content='nodes'") || false;
+    if (needsRebuild) {
+      db.exec(`DROP TABLE IF EXISTS nodes_fts`);
+      db.exec(`DROP TRIGGER IF EXISTS nodes_ai`);
+      db.exec(`DROP TRIGGER IF EXISTS nodes_ad`);
+      db.exec(`DROP TRIGGER IF EXISTS nodes_au`);
+      db.exec(`CREATE VIRTUAL TABLE nodes_fts USING fts5(content, tokenize='unicode61 remove_diacritics 2')`);
+      const rows = db.prepare(`SELECT rowid, content FROM nodes`).all() as Array<{ rowid: number; content: string }>;
+      const insertFts = db.prepare(`INSERT INTO nodes_fts(rowid, content) VALUES (?, ?)`);
+      for (const row of rows) {
+        insertFts.run(row.rowid, segmentText(row.content).join(' '));
+      }
+    }
+
     this.db = db;
 
     this.stmtGetNode = this.prepare(`SELECT ${NODE_COLS} FROM nodes WHERE id = ?`);
