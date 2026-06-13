@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Tokenizer } from "ai-tokenizer";
+import * as claude_encoding from "ai-tokenizer/encoding/claude";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian } from "@ai-agent-local-memory/core";
@@ -845,7 +847,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const beforeCount = messages.length;
         if (messages.length === 0) return;
 
-        const CHARS_PER_TOKEN = 4;
+        const tokenizer = new Tokenizer(claude_encoding);
+        const countTokens = (text: string) => tokenizer.encode(text, "all").length;
         const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.15);
         const RECENT_FULL_COUNT = 20;
         const MIN_HISTORIAN_WINDOW = 6;
@@ -859,16 +862,15 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
         for (const msg of recentMsgs) {
-          const msgLen = JSON.stringify(msg.parts).length;
-          totalTokens += msgLen / CHARS_PER_TOKEN;
+          totalTokens += countTokens(JSON.stringify(msg.parts));
           rendered.push(msg);
         }
 
         for (let i = compartments.length - 1; i >= 0; i--) {
           const c = compartments[i];
-          const p1Tokens = c.p1.length / CHARS_PER_TOKEN;
-          const p2Tokens = c.p2.length / CHARS_PER_TOKEN;
-          const p3Tokens = c.p3.length / CHARS_PER_TOKEN;
+          const p1Tokens = countTokens(c.p1);
+          const p2Tokens = countTokens(c.p2);
+          const p3Tokens = countTokens(c.p3);
 
           let text: string;
           if (totalTokens + p1Tokens < CONTEXT_BUDGET) {
@@ -894,7 +896,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const uncompartmentalizedOlder = olderMsgs.filter((_, idx) => idx > maxCompartOrd);
         for (let i = uncompartmentalizedOlder.length - 1; i >= 0; i--) {
           const msg = uncompartmentalizedOlder[i];
-          const msgTokens = JSON.stringify(msg.parts).length / CHARS_PER_TOKEN;
+          const msgTokens = countTokens(JSON.stringify(msg.parts));
           if (totalTokens + msgTokens < CONTEXT_BUDGET) {
             totalTokens += msgTokens;
             rendered.splice(compartments.length > 0 ? 1 : 0, 0, msg);
@@ -924,7 +926,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const afterTokens = Math.round(totalTokens);
         const beforeTokens = Math.round(messages.reduce((s: number, m: any) => {
-          return s + JSON.stringify(m.parts).length / CHARS_PER_TOKEN;
+          return s + countTokens(JSON.stringify(m.parts));
         }, 0));
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
         const beforePct = Math.round((beforeTokens / contextLimit) * 100);
