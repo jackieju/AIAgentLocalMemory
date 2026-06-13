@@ -158,6 +158,15 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     return {} as Hooks;
   }
 
+  const { writeFileSync: writeDiag } = await import("node:fs");
+  writeDiag("/tmp/neural-plugin-init.log", JSON.stringify({
+    ts: new Date().toISOString(),
+    hasEmbedding: !!embeddingProvider,
+    hasLlm: !!llmProvider,
+    configLoaded: !!pluginConfig.embedding,
+    directory,
+  }, null, 2));
+
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
     console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
@@ -760,12 +769,17 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       ? undefined
       : async (input, output) => {
       try {
-        const messages = input.messages ?? [];
+        const { appendFileSync: appendDiag } = await import("node:fs");
+        appendDiag("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] transform called, msgs=${output.messages?.length ?? 0}\n`);
+        const messages = output.messages ?? [];
         const seeds: Array<{nodeId: string; baseScore: number}> = [];
 
         for (const msg of messages) {
-          if (typeof msg.content !== "string") continue;
-          const role = msg.role as "user" | "assistant" | "system" | "tool";
+          const msgInfo = msg.info;
+          const textParts = msg.parts.filter((p: any) => p.type === "text");
+          const content = textParts.map((p: any) => p.text ?? "").join("\n");
+          if (!content || content.length < 5) continue;
+          const role = msgInfo.role as "user" | "assistant";
           if (role !== "user" && role !== "assistant") continue;
 
           const existingNodes = await storage.queryNodes({
@@ -774,7 +788,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           });
 
           const alreadyStored = existingNodes.some(
-            (n) => n.content === msg.content && (n.metadata?.episodicData as Record<string, unknown>)?.role === role,
+            (n) => n.content === content && (n.metadata?.episodicData as Record<string, unknown>)?.role === role,
           );
 
           if (!alreadyStored) {
@@ -782,23 +796,26 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             const episodicData: EpisodicData = {
               role,
               tag: turnCounter,
-              fidelity: { f0: msg.content },
+              fidelity: { f0: content },
               turnIndex: turnCounter,
             };
-            await engine.remember(msg.content, "episode", {
+            await engine.remember(content, "episode", {
               importance: role === "user" ? 0.6 : 0.5,
               metadata: { episodicData },
             });
           }
         }
 
-        const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
-        if (lastUserMsg && typeof lastUserMsg.content === "string") {
-          const tokens = lastUserMsg.content.toLowerCase().split(/\s+/).filter(Boolean);
-          const matchingNodes = await storage.search(tokens.slice(0, 5).join(" "), 5);
-          for (const node of matchingNodes) {
-            if (node.type === "concept" || node.type === "assertion") {
-              seeds.push({ nodeId: node.id, baseScore: 0.5 });
+        const lastUserMsg = [...messages].reverse().find((m) => m.info.role === "user");
+        if (lastUserMsg) {
+          const lastContent = lastUserMsg.parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join(" ");
+          if (lastContent) {
+            const tokens = lastContent.toLowerCase().split(/\s+/).filter(Boolean);
+            const matchingNodes = await storage.search(tokens.slice(0, 5).join(" "), 5);
+            for (const node of matchingNodes) {
+              if (node.type === "concept" || node.type === "assertion") {
+                seeds.push({ nodeId: node.id, baseScore: 0.5 });
+              }
             }
           }
         }
