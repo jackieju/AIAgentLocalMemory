@@ -789,7 +789,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         if (messages.length === 0) return;
 
         const CHARS_PER_TOKEN = 4;
-        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.4);
+        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.15);
         const RECENT_FULL_COUNT = 5;
         const MIN_HISTORIAN_WINDOW = 6;
         const HISTORIAN_CADENCE = 6;
