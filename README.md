@@ -70,18 +70,20 @@ Edges strengthen on co-activation: `Δw = η × (1 - w)` (asymptotic, never exce
 4. Hybrid score = `FTS_weight × fts_score + activation_weight × spread_score`
 5. Results sorted by descending relevance
 
-### Context Rendering (f0-f4 Fidelity)
-Every conversation message is stored as an episode node. When assembling context:
-1. Run spreading activation from current topic seeds
-2. Assign activation scores to each episode
-3. Binary search for threshold that fits within token budget
-4. Render each episode at appropriate fidelity level:
-   - **f0** — Full text (high activation / recent / pinned)
-   - **f1** — Paragraph summary (~200 tokens)
-   - **f2** — One-line gist (~30 tokens)
-   - **f3** — Title only (~8 tokens)
-   - **f4** — Elided placeholder (~5 tokens)
-5. Hysteresis band (±20%) prevents fidelity flickering between turns
+### Context Management (Historian + Compartments)
+Long conversations are automatically compressed to stay within the context window:
+
+1. **Recent messages** (last 20) are kept at full fidelity
+2. **Historian** (background LLM) compresses older messages into **compartments** — summaries at 3 levels:
+   - **p1** — Paragraph summary (~150 tokens): goals, decisions, files touched
+   - **p2** — One sentence (~25 tokens): the most important thing that happened
+   - **p3** — Title (~8 tokens): like a git commit subject
+3. **Budget fitting**: Compartments render at the highest fidelity that fits within 15% of context window
+4. **Trigger**: Every 6 turns or when context exceeds 80% budget, historian compresses the oldest uncompartmentalized window
+
+**Expanding compartments**: When you see compressed history, say "expand that section" or "show me the original" — the LLM will call `neural_expand(start=N, end=M)` to retrieve the full original text.
+
+**Result**: Infinite session support — context never overflows, old conversations are preserved as summaries, and original text is always retrievable on demand.
 
 ### Working Memory
 LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01 × hours_since_access)`. Lowest-score items evicted when full.
