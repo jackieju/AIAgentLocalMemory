@@ -8,6 +8,13 @@ import { execSync } from "node:child_process"
 import { Database } from "bun:sqlite"
 
 const VERSION = "0.4.1"
+const BUILD_NUMBER = (() => {
+  try {
+    const bnPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/BUILD_NUMBER")
+    if (existsSync(bnPath)) return readFileSync(bnPath, "utf-8").trim()
+  } catch {}
+  return "?"
+})()
 const BUILD_TIME = (() => {
   try {
     const distPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/dist/index.js")
@@ -127,7 +134,7 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
             <text bold fg="#f472b6">◆ Session</text>
             <text fg="#94a3b8">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
             <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} | {BUILD_TIME}</text>
+            <text fg="#64748b">v{VERSION} b{BUILD_NUMBER} | {BUILD_TIME}</text>
           </box>
         )
       },
