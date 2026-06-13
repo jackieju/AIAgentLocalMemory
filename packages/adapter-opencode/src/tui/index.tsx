@@ -1,11 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { createSignal, onCleanup } from "solid-js"
 import type { TuiPlugin, TuiSlotPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { execSync } from "node:child_process"
 import { Database } from "bun:sqlite"
+
+const BUILD_TIME = new Date().toISOString().slice(0, 19).replace("T", " ")
+const VERSION = "0.4.1"
 
 type Stats = {
   nodeCount: number
@@ -114,6 +117,8 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
             <text fg="#475569">─────────────────</text>
             <text bold fg="#f472b6">◆ Session</text>
             <text fg="#94a3b8">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
+            <text fg="#475569">─────────────────</text>
+            <text fg="#64748b">v{VERSION} | {BUILD_TIME}</text>
           </box>
         )
       },
