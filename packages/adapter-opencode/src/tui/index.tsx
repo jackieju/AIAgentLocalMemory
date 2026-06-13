@@ -7,8 +7,17 @@ import { homedir } from "node:os"
 import { execSync } from "node:child_process"
 import { Database } from "bun:sqlite"
 
-const BUILD_TIME = new Date().toISOString().slice(0, 19).replace("T", " ")
 const VERSION = "0.4.1"
+const BUILD_TIME = (() => {
+  try {
+    const distPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/dist/index.js")
+    if (existsSync(distPath)) {
+      const mtime = statSync(distPath).mtime
+      return mtime.toISOString().slice(0, 19).replace("T", " ")
+    }
+  } catch {}
+  return "unknown"
+})()
 
 type Stats = {
   nodeCount: number
