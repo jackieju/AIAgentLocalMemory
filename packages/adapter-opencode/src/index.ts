@@ -158,14 +158,16 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     return {} as Hooks;
   }
 
+  const SERVER_BUILD = "__BUILD_NUMBER__";
+  writeFileSync("/tmp/neural-server-build.txt", SERVER_BUILD);
   writeFileSync("/tmp/neural-plugin-init.log", JSON.stringify({
     ts: new Date().toISOString(),
+    build: SERVER_BUILD,
     hasEmbedding: !!embeddingProvider,
     hasLlm: !!llmProvider,
     configLoaded: !!pluginConfig.embedding,
     directory,
   }, null, 2));
-  writeFileSync("/tmp/neural-server-build.txt", readFileSync(join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/BUILD_NUMBER"), "utf-8").trim());
 
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
