@@ -854,8 +854,25 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const HISTORIAN_CHUNK_MIN = 8000;
         const HISTORIAN_CHUNK_MAX = 50000;
 
-        const compartments = compartmentStore.getForSession(sessionId);
-        const maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
+        let compartments = compartmentStore.getForSession(sessionId);
+        let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
+
+        if (compartments.length === 0 && messages.length > RECENT_FULL_COUNT && historian) {
+          const chunkSize = Math.min(12, messages.length - RECENT_FULL_COUNT);
+          const windowMsgs = messages.slice(0, chunkSize).map((m: any, idx: number) => {
+            const textParts = m.parts.filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+            return { role: m.info.role as string, content, ord: idx };
+          });
+          try {
+            const result = await (historian as any).compress(sessionId, windowMsgs);
+            if (result) {
+              compartmentStore.save(result);
+              compartments = compartmentStore.getForSession(sessionId);
+              maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
+            }
+          } catch {}
+        }
 
         let totalTokens = 0;
         const rendered: Array<any> = [];
