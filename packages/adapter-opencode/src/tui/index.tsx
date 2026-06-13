@@ -38,6 +38,7 @@ type Stats = {
   logLines: number
   syncRepo: string
   lastSync: string
+  compartmentStatus: { ts: number; beforePct: number; afterPct: number; compartments: number } | null
 }
 
 function getStats(): Stats {
@@ -82,7 +83,15 @@ function getStats(): Stats {
     if (out) lastSync = out
   } catch {}
 
-  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync }
+  let compartmentStatus: Stats["compartmentStatus"] = null
+  try {
+    const csPath = "/tmp/neural-compartment-status.json"
+    if (existsSync(csPath)) {
+      compartmentStatus = JSON.parse(readFileSync(csPath, "utf-8"))
+    }
+  } catch {}
+
+  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus }
 }
 
 function formatRepo(url: string): string {
@@ -137,6 +146,11 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
             <text fg="#475569">─────────────────</text>
             <text bold fg="#f472b6">◆ Session</text>
             <text fg="#94a3b8">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
+            <text fg="#475569">─────────────────</text>
+            <text bold fg="#fb923c">◆ Compartments</text>
+            <text fg="#94a3b8">{stats().compartmentStatus
+              ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
+              : "no data"}</text>
             <text fg="#475569">─────────────────</text>
             <text fg="#64748b">v{VERSION} b{BUILD_NUMBER} | {BUILD_TIME}</text>
           </box>

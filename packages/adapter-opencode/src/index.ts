@@ -859,9 +859,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
         for (const msg of recentMsgs) {
-          const textParts = msg.parts.filter((p: any) => p.type === "text");
-          const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
-          totalTokens += contentLen / CHARS_PER_TOKEN;
+          const msgLen = JSON.stringify(msg.parts).length;
+          totalTokens += msgLen / CHARS_PER_TOKEN;
           rendered.push(msg);
         }
 
@@ -891,13 +890,11 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           });
         }
 
-        const olderMsgs = messages.slice(RECENT_FULL_COUNT > messages.length ? 0 : 0, messages.length - RECENT_FULL_COUNT);
+        const olderMsgs = messages.slice(0, messages.length - RECENT_FULL_COUNT);
         const uncompartmentalizedOlder = olderMsgs.filter((_, idx) => idx > maxCompartOrd);
         for (let i = uncompartmentalizedOlder.length - 1; i >= 0; i--) {
           const msg = uncompartmentalizedOlder[i];
-          const textParts = msg.parts.filter((p: any) => p.type === "text");
-          const contentLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
-          const msgTokens = contentLen / CHARS_PER_TOKEN;
+          const msgTokens = JSON.stringify(msg.parts).length / CHARS_PER_TOKEN;
           if (totalTokens + msgTokens < CONTEXT_BUDGET) {
             totalTokens += msgTokens;
             rendered.splice(compartments.length > 0 ? 1 : 0, 0, msg);
@@ -925,7 +922,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }, 50);
         }
 
-        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length} tokens=${Math.round(totalTokens)} compartments=${compartments.length}\n`);
+        const afterTokens = Math.round(totalTokens);
+        const beforeTokens = Math.round(messages.reduce((s: number, m: any) => {
+          return s + JSON.stringify(m.parts).length / CHARS_PER_TOKEN;
+        }, 0));
+        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+        const beforePct = Math.round((beforeTokens / contextLimit) * 100);
+        const afterPct = Math.round((afterTokens / contextLimit) * 100);
+        writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
+          ts: Date.now(),
+          beforePct,
+          afterPct,
+          compartments: compartments.length,
+        }));
       } catch {}
     },
 
