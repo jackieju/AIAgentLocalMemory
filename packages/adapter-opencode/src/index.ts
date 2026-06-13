@@ -773,9 +773,10 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         if (messages.length === 0) return;
 
         const CHARS_PER_TOKEN = 4;
-        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.6);
-        const RECENT_FULL_COUNT = 8;
-        const F2_MAX_CHARS = 200;
+        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.4);
+        const RECENT_FULL_COUNT = 5;
+        const F2_MAX_CHARS = 150;
+        const MAX_MESSAGES = 100;
 
         let totalTokens = 0;
         const rendered: Array<{ info: any; parts: any[] }> = [];
@@ -805,7 +806,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }
         }
 
-        output.messages = rendered;
+        output.messages = rendered.length > MAX_MESSAGES ? rendered.slice(-MAX_MESSAGES) : rendered;
 
         setTimeout(() => {
           const lastMsgs = messages.slice(-2);
