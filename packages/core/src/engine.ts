@@ -275,9 +275,9 @@ export class NeuralContextEngine implements INeuralContextEngine {
       baseScore: ftsScores.get(n.id) ?? 0.5,
     }));
 
-    const maxHops = options.maxHops ?? 2;
+    const maxHops = options.maxHops ?? 1;
     const hopDecay = options.decayFactor ?? 0.3;
-    const threshold = options.threshold ?? 0.05;
+    const threshold = options.threshold ?? 0.1;
 
     const activations = await this.graph.spreadingActivation(spreadSeeds, {
       maxHops,

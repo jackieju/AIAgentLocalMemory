@@ -91,6 +91,7 @@ export class NeuralGraph {
 
     for (let hop = 0; hop < maxHops; hop++) {
       if (frontier.size === 0) break;
+      if (frontier.size > 20) break;
 
       const frontierIds = [...frontier];
       const edges = await this.storage.getEdgesBatch(frontierIds, "both");
