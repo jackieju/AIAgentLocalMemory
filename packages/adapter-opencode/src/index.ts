@@ -166,7 +166,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         llm: llmProvider ?? new OpenAICompatibleLLM({
           baseUrl: pluginConfig.embedding?.baseUrl ?? "http://localhost:6655/openai/v1",
           apiKey: pluginConfig.embedding?.apiKey ?? process.env.OPENAI_API_KEY,
-          model: "claude-sonnet-4-20250514",
+          model: "claude-sonnet-4-6",
           maxTokens: 400,
         }),
       })
@@ -918,7 +918,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           tailTokens += countTokens(JSON.stringify(m.parts));
         }
         
-        if (historian && tailTokens >= triggerBudget * TRIGGER_MULTIPLIER) {
+        if (historian && (tailTokens >= triggerBudget * TRIGGER_MULTIPLIER || totalTokens > CONTEXT_BUDGET * 0.8)) {
           const chunkBudget = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
           let chunkTokens = 0;
           let chunkEnd = tailStartIdx;
