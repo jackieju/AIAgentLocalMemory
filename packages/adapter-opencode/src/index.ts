@@ -910,7 +910,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           "- `neural_note` — Save durable facts/notes (session/project/global scope) that survive compression.",
           "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
           "- `neural_pin` — Pin tagged content to always show at full fidelity.",
-          "- `neural_expand` — Expand compressed/elided content back to full text.",
+          "- `neural_expand` — Expand compressed/elided content back to full text. When you see `<compartment start=\"N\" end=\"M\">`, call neural_expand(start=N, end=M) to retrieve the original messages. Use this whenever the user asks to see earlier conversation details.",
           "",
           "IMPORTANT: When you are unsure about user preferences, past decisions, project conventions, or anything discussed in previous sessions, ALWAYS call `neural_recall` first to check if relevant knowledge exists in memory. Do not guess — recall first, then act.",
           "If the user asks about something from another session, use `neural_session_read` to look up that session's conversation directly.",
