@@ -96,11 +96,16 @@ function rowToEdge(row: EdgeRow): Synapse {
   };
 }
 
+const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+
+function segmentText(text: string): string[] {
+  return [...segmenter.segment(text)]
+    .filter(s => s.isWordLike)
+    .map(s => s.segment.toLowerCase());
+}
+
 function escapeFtsQuery(query: string): string {
-  const tokens = query
-    .replace(/"/g, '')
-    .split(/[\s\p{P}]+/u)
-    .filter((w) => w.length > 0);
+  const tokens = segmentText(query.replace(/"/g, ''));
   if (tokens.length === 0) return '';
   return tokens.map((word) => `"${word}"`).join(' OR ');
 }
@@ -168,21 +173,8 @@ export class SqliteStorageProvider implements StorageProvider {
 
       CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
         content,
-        content='nodes',
-        content_rowid='rowid',
         tokenize='unicode61 remove_diacritics 2'
       );
-
-      CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
-        INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
-      END;
-      CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
-        INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-      END;
-      CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE OF content ON nodes BEGIN
-        INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
-        INSERT INTO nodes_fts(rowid, content) VALUES (new.rowid, new.content);
-      END;
     `);
 
     this.db = db;
@@ -269,6 +261,12 @@ export class SqliteStorageProvider implements StorageProvider {
       node.sourceRange ? JSON.stringify(node.sourceRange) : null,
       node.metadata ? JSON.stringify(node.metadata) : null,
     );
+    const db = this.requireDb();
+    const rowid = db.prepare(`SELECT rowid FROM nodes WHERE id = ?`).get(node.id) as { rowid: number } | null;
+    if (rowid) {
+      const segmented = segmentText(node.content).join(' ');
+      db.prepare(`INSERT OR REPLACE INTO nodes_fts(rowid, content) VALUES (?, ?)`).run(rowid.rowid, segmented);
+    }
   }
 
   async updateNode(id: string, updates: Partial<Omit<MemoryNode, 'id'>>): Promise<void> {
@@ -293,6 +291,11 @@ export class SqliteStorageProvider implements StorageProvider {
   }
 
   async deleteNode(id: string): Promise<void> {
+    const db = this.requireDb();
+    const rowid = db.prepare(`SELECT rowid FROM nodes WHERE id = ?`).get(id) as { rowid: number } | null;
+    if (rowid) {
+      db.prepare(`INSERT INTO nodes_fts(nodes_fts, rowid, content) VALUES ('delete', ?, '')`).run(rowid.rowid);
+    }
     this.stmtDeleteNode.run(id);
   }
 
