@@ -872,60 +872,36 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }, 50);
         }
 
-        let totalTokens = 0;
-        const rendered: Array<any> = [];
-
-        const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
-        for (const msg of recentMsgs) {
-          const textParts = msg.parts.filter((p: any) => p.type === "text");
-          const textLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
-          totalTokens += Math.ceil(textLen / 3.5);
-          rendered.push(msg);
-        }
-
-        for (let i = compartments.length - 1; i >= 0; i--) {
-          const c = compartments[i];
-          const p1Tokens = estimateTokens(c.p1);
-          const p2Tokens = estimateTokens(c.p2);
-          const p3Tokens = estimateTokens(c.p3);
+        for (let ci = 0; ci < compartments.length; ci++) {
+          const c = compartments[ci];
+          const startIdx = c.startOrd;
+          const endIdx = Math.min(c.endOrd, messages.length - 1);
+          const count = endIdx - startIdx + 1;
+          if (startIdx >= messages.length || count <= 0) continue;
 
           let text: string;
-          if (totalTokens + p1Tokens < CONTEXT_BUDGET) {
+          const p1Tokens = estimateTokens(c.p1);
+          if (p1Tokens < CONTEXT_BUDGET * 0.3) {
             text = c.p1;
-            totalTokens += p1Tokens;
-          } else if (totalTokens + p2Tokens < CONTEXT_BUDGET) {
-            text = c.p2;
-            totalTokens += p2Tokens;
-          } else if (totalTokens + p3Tokens < CONTEXT_BUDGET) {
-            text = c.p3;
-            totalTokens += p3Tokens;
           } else {
-            break;
+            text = c.p2;
           }
 
-          rendered.unshift({
+          const compartmentMsg = {
             info: { role: "user" },
             parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}">\n${text}\n</compartment>\n</session-history>` }],
-          });
+          };
+
+          messages.splice(startIdx - ci * (count - 1), count, compartmentMsg as any);
         }
 
-        if (compartments.length === 0 && messages.length > RECENT_FULL_COUNT) {
-          const olderCount = messages.length - RECENT_FULL_COUNT;
-          const sampleMsgs = messages.slice(0, Math.min(10, olderCount));
-          const summary = sampleMsgs.map((m: any) => {
-            const role = m.info?.role ?? "?";
-            const textParts = m.parts.filter((p: any) => p.type === "text");
-            const text = textParts.map((p: any) => p.text ?? "").join(" ").slice(0, 80);
-            return `[${role}] ${text}...`;
-          }).join("\n");
-          rendered.unshift({
-            info: { role: "user" },
-            parts: [{ type: "text", text: `<session-history>\n[${olderCount} earlier messages being compressed by historian...]\n${summary}\n</session-history>` }],
-          });
-        }
+        const MAX_OUTPUT_MESSAGES = 100;
+        const finalMessages = messages.length > MAX_OUTPUT_MESSAGES
+          ? messages.slice(-MAX_OUTPUT_MESSAGES)
+          : messages;
 
         output.messages.length = 0;
-        for (const msg of rendered) output.messages.push(msg);
+        for (const msg of finalMessages) output.messages.push(msg);
 
         historianTurnCount++;
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
@@ -933,7 +909,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const tailCount = Math.max(0, messages.length - RECENT_FULL_COUNT - (maxCompartOrd + 1));
         const tailTokensEstimate = tailCount * 500;
         
-        if (historian && (tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER || totalTokens > CONTEXT_BUDGET * 0.8)) {
+        if (historian && tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) {
           const tailStartIdx = Math.max(0, maxCompartOrd + 1);
           const chunkSize = Math.min(12, tailCount);
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
