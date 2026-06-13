@@ -865,7 +865,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             return { role: m.info.role as string, content, ord: idx };
           });
           try {
-            const result = await (historian as any).compress(sessionId, windowMsgs);
+            const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000));
+            const result = await Promise.race([(historian as any).compress(sessionId, windowMsgs), timeoutPromise]);
             if (result) {
               compartmentStore.save(result);
               compartments = compartmentStore.getForSession(sessionId);
