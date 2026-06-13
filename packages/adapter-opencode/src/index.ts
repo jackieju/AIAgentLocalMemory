@@ -874,4 +874,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   };
 };
 
-export default AIAgentLocalMemoryPlugin;
+export default {
+  id: "ai-agent-local-memory",
+  server: AIAgentLocalMemoryPlugin,
+};
