@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Tokenizer } from "ai-tokenizer";
-import * as claude_encoding from "ai-tokenizer/encoding/claude";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
 import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker } from "@ai-agent-local-memory/core";
@@ -847,8 +845,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const beforeCount = messages.length;
         if (messages.length === 0) return;
 
-        const tokenizer = new Tokenizer(claude_encoding);
-        const countTokens = (text: string) => tokenizer.encode(text, "all").length;
+        const estimateTokens = (text: string) => Math.ceil(text.length / 3.5);
         const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.15);
         const RECENT_FULL_COUNT = 20;
         const TRIGGER_BUDGET_PCT = 0.05;
@@ -865,15 +862,15 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
         for (const msg of recentMsgs) {
-          totalTokens += countTokens(JSON.stringify(msg.parts));
+          totalTokens += estimateTokens(JSON.stringify(msg.parts));
           rendered.push(msg);
         }
 
         for (let i = compartments.length - 1; i >= 0; i--) {
           const c = compartments[i];
-          const p1Tokens = countTokens(c.p1);
-          const p2Tokens = countTokens(c.p2);
-          const p3Tokens = countTokens(c.p3);
+          const p1Tokens = estimateTokens(c.p1);
+          const p2Tokens = estimateTokens(c.p2);
+          const p3Tokens = estimateTokens(c.p3);
 
           let text: string;
           if (totalTokens + p1Tokens < CONTEXT_BUDGET) {
@@ -899,7 +896,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const uncompartmentalizedOlder = olderMsgs.filter((_, idx) => idx > maxCompartOrd);
         for (let i = uncompartmentalizedOlder.length - 1; i >= 0; i--) {
           const msg = uncompartmentalizedOlder[i];
-          const msgTokens = countTokens(JSON.stringify(msg.parts));
+          const msgTokens = estimateTokens(JSON.stringify(msg.parts));
           if (totalTokens + msgTokens < CONTEXT_BUDGET) {
             totalTokens += msgTokens;
             rendered.splice(compartments.length > 0 ? 1 : 0, 0, msg);
@@ -916,7 +913,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const tailMsgs = messages.slice(tailStartIdx, messages.length - RECENT_FULL_COUNT);
         let tailTokens = 0;
         for (const m of tailMsgs) {
-          tailTokens += countTokens(JSON.stringify(m.parts));
+          tailTokens += estimateTokens(JSON.stringify(m.parts));
         }
         
         if (historian && (tailTokens >= triggerBudget * TRIGGER_MULTIPLIER || totalTokens > CONTEXT_BUDGET * 0.8)) {
@@ -924,7 +921,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           let chunkTokens = 0;
           let chunkEnd = tailStartIdx;
           while (chunkEnd < tailStartIdx + tailMsgs.length && chunkTokens < chunkBudget) {
-            chunkTokens += countTokens(JSON.stringify(messages[chunkEnd].parts));
+            chunkTokens += estimateTokens(JSON.stringify(messages[chunkEnd].parts));
             chunkEnd++;
           }
           const windowMsgs = messages.slice(tailStartIdx, chunkEnd).map((m: any, idx: number) => {
@@ -972,7 +969,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const afterTokens = Math.round(totalTokens);
         const beforeTokens = Math.round(messages.reduce((s: number, m: any) => {
-          return s + countTokens(JSON.stringify(m.parts));
+          return s + estimateTokens(JSON.stringify(m.parts));
         }, 0));
         const beforePct = Math.round((beforeTokens / contextLimit) * 100);
         const afterPct = Math.round((afterTokens / contextLimit) * 100);
