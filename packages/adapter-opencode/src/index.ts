@@ -862,7 +862,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const recentMsgs = messages.slice(-RECENT_FULL_COUNT);
         for (const msg of recentMsgs) {
-          totalTokens += estimateTokens(JSON.stringify(msg.parts));
+          const textParts = msg.parts.filter((p: any) => p.type === "text");
+          const textLen = textParts.reduce((s: number, p: any) => s + (p.text?.length ?? 0), 0);
+          totalTokens += Math.ceil(textLen / 3.5);
           rendered.push(msg);
         }
 
@@ -892,39 +894,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           });
         }
 
-        const olderMsgs = messages.slice(0, messages.length - RECENT_FULL_COUNT);
-        const uncompartmentalizedOlder = olderMsgs.filter((_, idx) => idx > maxCompartOrd);
-        for (let i = uncompartmentalizedOlder.length - 1; i >= 0; i--) {
-          const msg = uncompartmentalizedOlder[i];
-          const msgTokens = estimateTokens(JSON.stringify(msg.parts));
-          if (totalTokens + msgTokens < CONTEXT_BUDGET) {
-            totalTokens += msgTokens;
-            rendered.splice(compartments.length > 0 ? 1 : 0, 0, msg);
-          }
-        }
-
         output.messages.length = 0;
         for (const msg of rendered) output.messages.push(msg);
 
         historianTurnCount++;
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
-        const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-        const tailMsgs = messages.slice(tailStartIdx, messages.length - RECENT_FULL_COUNT);
-        let tailTokens = 0;
-        for (const m of tailMsgs) {
-          tailTokens += estimateTokens(JSON.stringify(m.parts));
-        }
+        const tailCount = Math.max(0, messages.length - RECENT_FULL_COUNT - (maxCompartOrd + 1));
+        const tailTokensEstimate = tailCount * 500;
         
-        if (historian && (tailTokens >= triggerBudget * TRIGGER_MULTIPLIER || totalTokens > CONTEXT_BUDGET * 0.8)) {
-          const chunkBudget = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
-          let chunkTokens = 0;
-          let chunkEnd = tailStartIdx;
-          while (chunkEnd < tailStartIdx + tailMsgs.length && chunkTokens < chunkBudget) {
-            chunkTokens += estimateTokens(JSON.stringify(messages[chunkEnd].parts));
-            chunkEnd++;
-          }
-          const windowMsgs = messages.slice(tailStartIdx, chunkEnd).map((m: any, idx: number) => {
+        if (historian && (tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER || totalTokens > CONTEXT_BUDGET * 0.8)) {
+          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
+          const chunkSize = Math.min(12, tailCount);
+          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
             const textParts = m.parts.filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             return { role: m.info.role as string, content, ord: tailStartIdx + idx };
@@ -968,10 +950,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         }, 200);
 
         const afterTokens = Math.round(totalTokens);
-        const beforeTokens = Math.round(messages.reduce((s: number, m: any) => {
-          return s + estimateTokens(JSON.stringify(m.parts));
-        }, 0));
-        const beforePct = Math.round((beforeTokens / contextLimit) * 100);
+        const beforePct = Math.round((messages.length * 500 / contextLimit) * 100);
         const afterPct = Math.round((afterTokens / contextLimit) * 100);
         writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
           ts: Date.now(),
