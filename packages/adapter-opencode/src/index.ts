@@ -772,6 +772,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       : async (input, output) => {
       try {
         const messages = output.messages ?? [];
+        const beforeCount = messages.length;
         if (messages.length === 0) return;
 
         const CHARS_PER_TOKEN = 4;
@@ -809,6 +810,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         }
 
         output.messages = rendered.length > MAX_MESSAGES ? rendered.slice(-MAX_MESSAGES) : rendered;
+        appendFileSync("/tmp/neural-transform-debug.log", `[${new Date().toISOString()}] before=${beforeCount} after=${output.messages.length}\n`);
 
         setTimeout(() => {
           const lastMsgs = messages.slice(-2);
