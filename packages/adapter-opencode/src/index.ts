@@ -927,13 +927,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         let compartments = compartmentStore.getForSession(sessionId);
         let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
 
-        for (let ci = 0; ci < compartments.length; ci++) {
-          const c = compartments[ci];
-          const startIdx = c.startOrd;
-          const endIdx = Math.min(c.endOrd, messages.length - 1);
-          const count = endIdx - startIdx + 1;
-          if (startIdx >= messages.length || count <= 0) continue;
+        const rendered: Array<any> = [];
 
+        for (const c of compartments) {
           let text: string;
           const p1Tokens = estimateTokens(c.p1);
           if (p1Tokens < CONTEXT_BUDGET * 0.3) {
@@ -941,22 +937,20 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           } else {
             text = c.p2;
           }
-
-          const compartmentMsg = {
+          rendered.push({
             info: { role: "user" },
             parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}">\n${text}\n</compartment>\n</session-history>` }],
-          };
-
-          messages.splice(startIdx - ci * (count - 1), count, compartmentMsg as any);
+          });
         }
 
-        const MAX_OUTPUT_MESSAGES = 30;
-        const finalMessages = messages.length > MAX_OUTPUT_MESSAGES
-          ? messages.slice(-MAX_OUTPUT_MESSAGES)
-          : messages;
+        const tailStart = maxCompartOrd + 1;
+        const tail = messages.slice(tailStart);
+        const MAX_TAIL = 30;
+        const trimmedTail = tail.length > MAX_TAIL ? tail.slice(-MAX_TAIL) : tail;
+        for (const msg of trimmedTail) rendered.push(msg);
 
         output.messages.length = 0;
-        for (const msg of finalMessages) output.messages.push(msg);
+        for (const msg of rendered) output.messages.push(msg);
 
         historianTurnCount++;
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
