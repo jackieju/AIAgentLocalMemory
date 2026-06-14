@@ -648,7 +648,14 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             try {
               execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
               const result = await opLog.replay(storage);
-              return { title: "Pulled", output: `Remote changes pulled.\nApplied: ${result.applied} operations, Skipped: ${result.skipped} (own machine).` };
+              let embedded = 0;
+              if (result.applied > 0 && embeddingProvider) {
+                const { EmbeddingLinker } = await import("@ai-agent-local-memory/core");
+                const linker = new EmbeddingLinker(rawStorage, embeddingProvider, { batchSize: 32, similarityThreshold: 0.7 });
+                const embResult = await linker.run({ limit: result.applied });
+                embedded = embResult.embedded;
+              }
+              return { title: "Pulled", output: `Remote changes pulled.\nApplied: ${result.applied} operations, Skipped: ${result.skipped}.\nEmbedded: ${embedded} new nodes.` };
             } catch (e: any) {
               return { title: "Pull failed", output: e.message };
             }
