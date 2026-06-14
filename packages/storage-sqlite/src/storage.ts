@@ -97,6 +97,7 @@ function rowToEdge(row: EdgeRow): Synapse {
 }
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+const STOP_WORDS = new Set(["的", "是", "了", "在", "有", "和", "与", "对", "这", "那", "我", "你", "他", "她", "它", "们", "吗", "呢", "吧", "啊", "哦", "嗯", "就", "都", "也", "还", "又", "被", "把", "让", "给", "从", "到", "为", "以", "而", "但", "或", "如", "用", "个", "一", "不", "会", "可", "能", "很", "最", "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "shall", "can", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through", "during", "before", "after", "above", "below", "between", "out", "off", "over", "under", "again", "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so", "than", "too", "very", "just", "because", "if", "or", "and", "but", "this", "that", "these", "those", "i", "me", "my", "we", "our", "you", "your", "it", "its", "they", "them", "their", "what", "which", "who", "whom"]);
 
 function segmentText(text: string): string[] {
   return [...segmenter.segment(text)]
@@ -105,7 +106,7 @@ function segmentText(text: string): string[] {
 }
 
 function escapeFtsQuery(query: string): string {
-  const tokens = segmentText(query.replace(/"/g, ''));
+  const tokens = segmentText(query.replace(/"/g, '')).filter(t => t.length > 1 && !STOP_WORDS.has(t));
   if (tokens.length === 0) return '';
   return tokens.map((word) => `"${word}"`).join(' OR ');
 }
