@@ -207,6 +207,9 @@ export class NeuralContextEngine implements INeuralContextEngine {
     this.workingMemory.access(node.id);
 
     await this.lightweightLinker.linkToExisting(node);
+    if (this.embeddingLinker) {
+      try { await this.embeddingLinker.linkNode(node); } catch {}
+    }
 
     return node;
   }
