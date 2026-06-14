@@ -882,6 +882,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           "- `neural_expand` — Expand compressed/elided content back to full text. When you see `<compartment start=\"N\" end=\"M\">`, call neural_expand(start=N, end=M) to retrieve the original messages. Use this whenever the user asks to see earlier conversation details.",
           "",
           "IMPORTANT: When you are unsure about user preferences, past decisions, project conventions, or anything discussed in previous sessions, ALWAYS call `neural_recall` first to check if relevant knowledge exists in memory. Do not guess — recall first, then act.",
+          "IMPORTANT: When the user shares personal preferences, facts about themselves, decisions, or anything worth remembering long-term (e.g. 'my favorite X is Y', 'I prefer Z', 'remember that...'), ALWAYS call `neural_remember` to store it. This ensures cross-session memory.",
           "If the user asks about something from another session, use `neural_session_read` to look up that session's conversation directly.",
         ].join("\n");
         output.system.push(usageGuide);
