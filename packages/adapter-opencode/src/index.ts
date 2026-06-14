@@ -826,6 +826,12 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             return { role: m.info.role as string, content, ord: tailStartIdx + idx };
           });
+          setTimeout(async () => {
+            try {
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) compartmentStore.save(result);
+            } catch {}
+          }, 100);
         }
 
         const afterTokens = Math.round(totalTokens);
