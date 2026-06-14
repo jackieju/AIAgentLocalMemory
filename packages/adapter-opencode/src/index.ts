@@ -182,8 +182,30 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     directory,
   }, null, 2));
 
-  // historian, gap backfill, and sync disabled for stability
-  // TODO: re-enable after memory optimization
+  setTimeout(async () => {
+    try {
+      const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } });
+      if (!msgsResult.data || msgsResult.data.length === 0) return;
+      for (const msg of msgsResult.data.slice(-20)) {
+        const role = msg.info.role;
+        if (role !== "user" && role !== "assistant") continue;
+        const textParts = msg.parts.filter((p: any) => p.type === "text");
+        const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+        if (content.length < 10 || content.length > 3000) continue;
+        await storage.putNode({
+          id: crypto.randomUUID(),
+          type: "episode",
+          content: content.slice(0, 2000),
+          importance: role === "user" ? 0.6 : 0.5,
+          strength: 0.5,
+          accessCount: 0,
+          lastAccessed: Date.now(),
+          createdAt: Date.now(),
+          sourceSession: sessionId,
+        });
+      }
+    } catch {}
+  }, 8000);
 
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
