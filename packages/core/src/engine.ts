@@ -162,9 +162,6 @@ export class NeuralContextEngine implements INeuralContextEngine {
       this.workingMemory.access(episode.id);
 
       await this.lightweightLinker.linkToExisting(episode);
-      if (this.embeddingLinker) {
-        try { await this.embeddingLinker.linkNode(episode); } catch {}
-      }
       return;
     }
 
@@ -184,9 +181,6 @@ export class NeuralContextEngine implements INeuralContextEngine {
     for (const node of nodes) {
       if (node.type === "concept") this.workingMemory.access(node.id);
       await this.lightweightLinker.linkToExisting(node);
-      if (this.embeddingLinker) {
-        try { await this.embeddingLinker.linkNode(node); } catch {}
-      }
     }
   }
 
@@ -213,9 +207,6 @@ export class NeuralContextEngine implements INeuralContextEngine {
     this.workingMemory.access(node.id);
 
     await this.lightweightLinker.linkToExisting(node);
-    if (this.embeddingLinker) {
-      try { await this.embeddingLinker.linkNode(node); } catch {}
-    }
 
     return node;
   }
