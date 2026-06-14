@@ -182,75 +182,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     directory,
   }, null, 2));
 
-  if (historian) {
-    const existingCompartments = compartmentStore.getForSession(sessionId);
-    if (existingCompartments.length === 0) {
-      (async () => {
-        try {
-          const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
-          if (!msgsResult.data || msgsResult.data.length <= 20) return;
-
-          const chunkSize = Math.min(12, msgsResult.data.length - 20);
-          const windowMsgs = msgsResult.data.slice(0, chunkSize).map((m: any, idx: number) => {
-            const textParts = m.parts.filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => (p as {text?: string}).text ?? "").join("\n").slice(0, 1000);
-            return { role: m.info.role as string, content, ord: idx };
-          });
-
-          const childSession = await client.session.create({
-            directory,
-            title: "[historian] compress",
-            model: { id: "claude-sonnet-4-6", providerID: "anthropic" },
-          });
-          if (!childSession.data) {
-            const result = await (historian as any).compress(sessionId, windowMsgs);
-            if (result) compartmentStore.save(result);
-            return;
-          }
-
-          const transcript = windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n");
-          const historianPrompt = `You compress conversation history into three fidelity tiers.\nOutput STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }\n\np1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.\np2: One sentence (≤25 tokens). The single most important thing that happened.\np3: A title (≤8 tokens). Like a git commit subject.\n\nPreserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.\n\nCONVERSATION:\n${transcript}\n\nJSON:`;
-
-          await client.session.promptAsync({
-            sessionID: childSession.data.id,
-            parts: [{ type: "text", text: historianPrompt }],
-            model: { providerID: "anthropic", modelID: "claude-sonnet-4-6" },
-          });
-
-          await new Promise(r => setTimeout(r, 15000));
-
-          const childMsgs = await client.session.messages({ path: { id: childSession.data.id }, query: { limit: 5 } });
-          if (childMsgs.data) {
-            for (const msg of childMsgs.data) {
-              if (msg.info.role !== "assistant") continue;
-              const textParts = msg.parts.filter((p: any) => p.type === "text");
-              const response = textParts.map((p: any) => (p as {text?: string}).text ?? "").join("");
-              const jsonMatch = response.match(/\{[\s\S]*\}/);
-              if (!jsonMatch) continue;
-              try {
-                const parsed = JSON.parse(jsonMatch[0]);
-                if (parsed.p1 && parsed.p2 && parsed.p3) {
-                  compartmentStore.save({
-                    sessionId,
-                    startOrd: windowMsgs[0].ord,
-                    endOrd: windowMsgs[windowMsgs.length - 1].ord,
-                    p1: String(parsed.p1),
-                    p2: String(parsed.p2),
-                    p3: String(parsed.p3),
-                    tokenCount: Math.round(transcript.length / 3.5),
-                    createdAt: Date.now(),
-                  });
-                  break;
-                }
-              } catch {}
-            }
-          }
-
-          try { await client.session.delete({ path: { id: childSession.data.id } }); } catch {}
-        } catch {}
-      })();
-    }
-  }
+  // historian, gap backfill, and sync disabled for stability
+  // TODO: re-enable after memory optimization
 
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
   if (magicContextPresent) {
@@ -335,36 +268,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
     budgetRatio: pluginConfig.budgetRatio ?? 0.6,
   };
-
-  setTimeout(async () => {
-    try {
-      const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
-      const storedCount = episodes.length;
-      const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
-      if (!msgsResult.data) return;
-      const totalMsgs = msgsResult.data.length;
-      if (totalMsgs <= storedCount) return;
-      const gap = msgsResult.data.slice(storedCount, totalMsgs - 2);
-      for (const msg of gap) {
-        const role = msg.info.role;
-        if (role !== "user" && role !== "assistant") continue;
-        const textParts = msg.parts.filter((p: any) => p.type === "text");
-        const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
-        if (content.length < 10) continue;
-        await storage.putNode({
-          id: crypto.randomUUID(),
-          type: "episode",
-          content: content.slice(0, 5000),
-          importance: role === "user" ? 0.6 : 0.5,
-          strength: 0.5,
-          accessCount: 0,
-          lastAccessed: Date.now(),
-          createdAt: Date.now(),
-          sourceSession: sessionId,
-        });
-      }
-    } catch {}
-  }, 5000);
 
   const graph = new NeuralGraph(storage);
   const workingMemory = new WorkingMemory();
@@ -966,43 +869,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             return { role: m.info.role as string, content, ord: tailStartIdx + idx };
           });
-          
-          setTimeout(async () => {
-            try {
-              const result = await (historian as any).compress(sessionId, windowMsgs);
-              if (result) compartmentStore.save(result);
-            } catch {}
-          }, 50);
         }
-
-        setTimeout(async () => {
-          try {
-            const linker = new LightweightLinker(rawStorage);
-            const lastMsgs = messages.slice(-3);
-            for (const msg of lastMsgs) {
-              const role = msg.info?.role;
-              if (role !== "user" && role !== "assistant") continue;
-              const textParts = msg.parts.filter((p: any) => p.type === "text");
-              const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
-              if (content.length < 10) continue;
-              turnCounter++;
-              const node = {
-                id: crypto.randomUUID(),
-                type: "episode" as const,
-                content: content.slice(0, 5000),
-                importance: role === "user" ? 0.6 : 0.5,
-                strength: 0.5,
-                accessCount: 0,
-                lastAccessed: Date.now(),
-                createdAt: Date.now(),
-                sourceSession: sessionId,
-                metadata: { episodicData: { role, tag: turnCounter, fidelity: { f0: content.slice(0, 5000) }, turnIndex: turnCounter } },
-              };
-              await storage.putNode(node);
-              await linker.linkToExisting(node);
-            }
-          } catch {}
-        }, 200);
 
         const afterTokens = Math.round(totalTokens);
         const beforePct = Math.round((messages.length * 500 / contextLimit) * 100);
