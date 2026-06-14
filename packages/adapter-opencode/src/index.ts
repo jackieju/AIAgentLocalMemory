@@ -185,20 +185,70 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   if (historian) {
     const existingCompartments = compartmentStore.getForSession(sessionId);
     if (existingCompartments.length === 0) {
-      try {
-        const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
-        if (msgsResult.data && msgsResult.data.length > 20) {
+      (async () => {
+        try {
+          const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
+          if (!msgsResult.data || msgsResult.data.length <= 20) return;
+
           const chunkSize = Math.min(12, msgsResult.data.length - 20);
           const windowMsgs = msgsResult.data.slice(0, chunkSize).map((m: any, idx: number) => {
             const textParts = m.parts.filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => (p as {text?: string}).text ?? "").join("\n").slice(0, 1000);
             return { role: m.info.role as string, content, ord: idx };
           });
-          const timeout = new Promise<null>((r) => setTimeout(() => r(null), 10000));
-          const result = await Promise.race([(historian as any).compress(sessionId, windowMsgs), timeout]);
-          if (result) compartmentStore.save(result);
-        }
-      } catch {}
+
+          const childSession = await client.session.create({
+            directory,
+            title: "[historian] compress",
+            model: { id: "claude-sonnet-4-6", providerID: "anthropic" },
+          });
+          if (!childSession.data) {
+            const result = await (historian as any).compress(sessionId, windowMsgs);
+            if (result) compartmentStore.save(result);
+            return;
+          }
+
+          const transcript = windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n");
+          const historianPrompt = `You compress conversation history into three fidelity tiers.\nOutput STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }\n\np1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.\np2: One sentence (≤25 tokens). The single most important thing that happened.\np3: A title (≤8 tokens). Like a git commit subject.\n\nPreserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.\n\nCONVERSATION:\n${transcript}\n\nJSON:`;
+
+          await client.session.promptAsync({
+            sessionID: childSession.data.id,
+            parts: [{ type: "text", text: historianPrompt }],
+            model: { providerID: "anthropic", modelID: "claude-sonnet-4-6" },
+          });
+
+          await new Promise(r => setTimeout(r, 15000));
+
+          const childMsgs = await client.session.messages({ path: { id: childSession.data.id }, query: { limit: 5 } });
+          if (childMsgs.data) {
+            for (const msg of childMsgs.data) {
+              if (msg.info.role !== "assistant") continue;
+              const textParts = msg.parts.filter((p: any) => p.type === "text");
+              const response = textParts.map((p: any) => (p as {text?: string}).text ?? "").join("");
+              const jsonMatch = response.match(/\{[\s\S]*\}/);
+              if (!jsonMatch) continue;
+              try {
+                const parsed = JSON.parse(jsonMatch[0]);
+                if (parsed.p1 && parsed.p2 && parsed.p3) {
+                  compartmentStore.save({
+                    sessionId,
+                    startOrd: windowMsgs[0].ord,
+                    endOrd: windowMsgs[windowMsgs.length - 1].ord,
+                    p1: String(parsed.p1),
+                    p2: String(parsed.p2),
+                    p3: String(parsed.p3),
+                    tokenCount: Math.round(transcript.length / 3.5),
+                    createdAt: Date.now(),
+                  });
+                  break;
+                }
+              } catch {}
+            }
+          }
+
+          try { await client.session.delete({ path: { id: childSession.data.id } }); } catch {}
+        } catch {}
+      })();
     }
   }
 
