@@ -831,6 +831,34 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const afterTokens = Math.round(totalTokens);
         const beforePct = Math.round((messages.length * 500 / contextLimit) * 100);
         const afterPct = Math.round((afterTokens / contextLimit) * 100);
+        setTimeout(async () => {
+          try {
+            const linker = new LightweightLinker(rawStorage);
+            const lastMsgs = messages.slice(-2);
+            for (const msg of lastMsgs) {
+              const role = msg.info?.role;
+              if (role !== "user" && role !== "assistant") continue;
+              const textParts = msg.parts.filter((p: any) => p.type === "text");
+              const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
+              if (content.length < 10 || content.length > 3000) continue;
+              turnCounter++;
+              const node = {
+                id: crypto.randomUUID(),
+                type: "episode" as const,
+                content: content.slice(0, 2000),
+                importance: role === "user" ? 0.6 : 0.5,
+                strength: 0.5,
+                accessCount: 0,
+                lastAccessed: Date.now(),
+                createdAt: Date.now(),
+                sourceSession: sessionId,
+              };
+              await storage.putNode(node);
+              await linker.linkToExisting(node);
+            }
+          } catch {}
+        }, 500);
+
         writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
           ts: Date.now(),
           beforePct,
