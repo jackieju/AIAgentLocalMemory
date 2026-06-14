@@ -950,7 +950,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           messages.splice(startIdx - ci * (count - 1), count, compartmentMsg as any);
         }
 
-        const MAX_OUTPUT_MESSAGES = 100;
+        const MAX_OUTPUT_MESSAGES = 30;
         const finalMessages = messages.length > MAX_OUTPUT_MESSAGES
           ? messages.slice(-MAX_OUTPUT_MESSAGES)
           : messages;
