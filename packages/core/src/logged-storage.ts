@@ -27,11 +27,14 @@ export class LoggedStorageProvider implements StorageProvider {
 
   async putNode(node: MemoryNode): Promise<void> {
     await this.inner.putNode(node);
+    const { metadata, ...rest } = node;
+    const cleanMeta = metadata ? { ...metadata } : undefined;
+    if (cleanMeta) delete (cleanMeta as Record<string, unknown>).embedding;
     this.log.append({
       ts: Date.now(),
       machine: this.log.machineId,
       op: "add_node",
-      data: node,
+      data: { ...rest, metadata: cleanMeta },
     });
   }
 

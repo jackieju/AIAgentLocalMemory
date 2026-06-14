@@ -106,7 +106,11 @@ function segmentText(text: string): string[] {
 }
 
 function escapeFtsQuery(query: string): string {
-  const tokens = segmentText(query.replace(/"/g, '')).filter(t => t.length > 1 && !STOP_WORDS.has(t));
+  const tokens = segmentText(query.replace(/"/g, '')).filter(t => {
+    if (STOP_WORDS.has(t)) return false;
+    if (t.length === 1 && /^[a-z0-9]$/i.test(t)) return false;
+    return true;
+  });
   if (tokens.length === 0) return '';
   return tokens.map((word) => `"${word}"`).join(' OR ');
 }

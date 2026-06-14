@@ -675,7 +675,10 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             let skipped = 0;
             for (const node of allNodes) {
               if (existingIds.has(node.id)) { skipped++; continue; }
-              opLog.append({ ts: node.createdAt || Date.now(), machine: opLog.machineId, op: "add_node", data: node });
+              const { metadata, ...nodeWithoutMeta } = node;
+              const cleanMeta = metadata ? { ...metadata } : undefined;
+              if (cleanMeta) delete (cleanMeta as any).embedding;
+              opLog.append({ ts: node.createdAt || Date.now(), machine: opLog.machineId, op: "add_node", data: { ...nodeWithoutMeta, metadata: cleanMeta } });
               exported++;
             }
             for (const edge of allEdges) {
