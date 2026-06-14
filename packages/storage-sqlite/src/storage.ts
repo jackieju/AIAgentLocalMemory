@@ -201,6 +201,18 @@ export class SqliteStorageProvider implements StorageProvider {
       }, 10000);
     }
 
+    setTimeout(() => {
+      try {
+        const unsegmented = db.prepare(`SELECT n.rowid, n.content FROM nodes n JOIN nodes_fts f ON f.rowid = n.rowid WHERE f.content = n.content LIMIT 500`).all() as Array<{ rowid: number; content: string }>;
+        if (unsegmented.length > 0) {
+          const fix = db.prepare(`INSERT OR REPLACE INTO nodes_fts(rowid, content) VALUES (?, ?)`);
+          for (const row of unsegmented) {
+            fix.run(row.rowid, segmentText(row.content.slice(0, 2000)).join(' '));
+          }
+        }
+      } catch {}
+    }, 3000);
+
     this.db = db;
 
     this.stmtGetNode = this.prepare(`SELECT ${NODE_COLS} FROM nodes WHERE id = ?`);
