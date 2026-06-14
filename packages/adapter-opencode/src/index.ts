@@ -208,46 +208,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }, 8000);
 
   if (existsSync(join(syncDir, ".git"))) {
-    const logFile = join(syncDir, "operations.jsonl");
-    const isFirstJoin = (() => {
-      if (!existsSync(logFile)) return true;
-      try {
-        const content = readFileSync(logFile, "utf-8").slice(0, 10000);
-        return !content.includes(`"machine":"${opLog.machineId}"`);
-      } catch { return true; }
-    })();
-
-    if (isFirstJoin) {
-      setTimeout(async () => {
-        try {
-          const { execSync } = await import("node:child_process");
-          execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
-          await opLog.replay(storage);
-
-          const allNodes = await storage.getAllNodes();
-          const allEdges = await storage.getAllEdges();
-          const existingIds = new Set<string>();
-          if (existsSync(logFile)) {
-            const lines = readFileSync(logFile, "utf-8").trim().split("\n").filter(Boolean);
-            for (const line of lines) {
-              try {
-                const op = JSON.parse(line);
-                if (op.op === "add_node" && op.data?.id) existingIds.add(op.data.id);
-                if (op.op === "add_edge" && op.data) existingIds.add(`${op.data.src}|${op.data.dst}|${op.data.type}`);
-              } catch {}
-            }
-          }
-          for (const node of allNodes) {
-            if (!existingIds.has(node.id)) opLog.append({ ts: node.createdAt || Date.now(), machine: opLog.machineId, op: "add_node", data: node });
-          }
-          for (const edge of allEdges) {
-            if (!existingIds.has(`${edge.src}|${edge.dst}|${edge.type}`)) opLog.append({ ts: edge.lastCoactivated || Date.now(), machine: opLog.machineId, op: "add_edge", data: edge });
-          }
-
-          execSync('git add -A && git commit -m "sync: first join export" --allow-empty && git push', { cwd: syncDir, stdio: "ignore" });
-        } catch {}
-      }, 15000);
-    }
   }
 
   const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
