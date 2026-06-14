@@ -87,7 +87,8 @@ function formatRecall(results: RecallResult[]): string {
   return results
     .map((r, i) => {
       const path = r.path && r.path.length > 1 ? ` [path: ${r.path.join(" → ")}]` : "";
-      return `${i + 1}. [${r.node.type}] (score=${r.score.toFixed(3)}) ${r.node.id}${path}\n   ${r.node.content}`;
+      const time = r.node.createdAt ? new Date(r.node.createdAt).toISOString().slice(0, 16).replace("T", " ") : "";
+      return `${i + 1}. [${r.node.type}] (score=${r.score.toFixed(3)}) ${time}${path}\n   ${r.node.content}`;
     })
     .join("\n\n");
 }
