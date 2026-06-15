@@ -1214,8 +1214,9 @@ JSON:`;
         }
 
         if (rendered.length > 0) {
-          messages.length = 0;
-          for (const msg of rendered) messages.push(msg);
+          const MAX_RENDER = 200;
+          const final = rendered.length > MAX_RENDER ? rendered.slice(-MAX_RENDER) : rendered;
+          messages.splice(0, messages.length, ...final);
         }
 
         historianTurnCount++;
