@@ -1129,7 +1129,9 @@ JSON:`;
         } else {
           let tailTokens = 0;
           let startIdx = messages.length;
+          let count = 0;
           for (let i = messages.length - 1; i >= tailStart; i--) {
+            if (count >= 200) break;
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
@@ -1138,6 +1140,7 @@ JSON:`;
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
+            count++;
           }
           tail = messages.slice(startIdx);
           if (tail.length === 0) {
@@ -1382,7 +1385,7 @@ JSON:`;
 
         const afterPct = (() => {
           let totalTokens = 0;
-          for (const msg of rendered) {
+          for (const msg of messages) {
             totalTokens += 10;
             for (const part of (msg.parts ?? [])) {
               const text = (part as any).text ?? "";
