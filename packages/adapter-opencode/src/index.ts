@@ -160,6 +160,38 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }
 
   const compartmentStore = new CompartmentStore(rawStorage.getDb());
+
+  let openCodeDb: any = null;
+  try {
+    const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+    const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
+    if (existsSync(openCodeDbPath)) {
+      const { Database: BunDB } = await import("bun:sqlite");
+      openCodeDb = new BunDB(openCodeDbPath, { readonly: true });
+    }
+  } catch {}
+
+  function getContextUsage(sid: string): { percentage: number; inputTokens: number } {
+    if (!openCodeDb) return { percentage: 0, inputTokens: 0 };
+    try {
+      const row = openCodeDb.prepare(`
+        SELECT 
+          COALESCE(json_extract(data, '$.tokens.input'), 0)
+            + COALESCE(json_extract(data, '$.tokens.cache.read'), 0)
+            + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS prompt
+        FROM message
+        WHERE session_id = ?
+          AND json_extract(data, '$.role') = 'assistant'
+          AND data IS NOT NULL
+        ORDER BY time_created DESC
+        LIMIT 1
+      `).get(sid) as { prompt: number } | undefined;
+      if (!row) return { percentage: 0, inputTokens: 0 };
+      const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+      return { percentage: (row.prompt / contextLimit) * 100, inputTokens: row.prompt };
+    } catch { return { percentage: 0, inputTokens: 0 }; }
+  }
+
   const historianModels = ["claude-sonnet-4-6", "gpt-4.1-mini", "gpt-5-mini"];
   const historianLlm = llmProvider ?? new OpenAICompatibleLLM({
     baseUrl: pluginConfig.embedding?.baseUrl ?? pluginConfig.llm?.baseUrl ?? "http://localhost:6655/openai/v1",
@@ -841,9 +873,61 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
         const tailStart = maxCompartOrd + 1;
         const tail = messages.slice(tailStart);
-        const MAX_TAIL = 30;
-        const trimmedTail = tail.length > MAX_TAIL ? tail.slice(-MAX_TAIL) : tail;
-        for (const msg of trimmedTail) rendered.push(msg);
+        
+        const PROTECTED_TAIL_MESSAGES = 20;
+        const CLEAR_REASONING_AGE = 50;
+        const protectedStart = Math.max(0, tail.length - PROTECTED_TAIL_MESSAGES);
+
+        let prevTimestamp = 0;
+        for (let i = 0; i < tail.length; i++) {
+          const msg = tail[i];
+          const ts = msg.info?.time?.created ? msg.info.time.created * 1000 : 0;
+          if (prevTimestamp > 0 && ts > 0 && msg.info?.role === "user") {
+            const gap = ts - prevTimestamp;
+            if (gap > 5 * 60 * 1000) {
+              const minutes = Math.round(gap / 60000);
+              let label: string;
+              if (minutes < 60) label = `+${minutes}m`;
+              else if (minutes < 1440) label = `+${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+              else label = `+${Math.floor(minutes / 1440)}d ${Math.floor((minutes % 1440) / 60)}h`;
+              for (const part of (msg.parts ?? [])) {
+                if (part.type === "text" && part.text) {
+                  part.text = `<!-- ${label} -->\n${part.text}`;
+                  break;
+                }
+              }
+            }
+          }
+          if (ts > 0) prevTimestamp = ts;
+          const isProtected = i >= protectedStart;
+          
+          if (!isProtected && msg.info?.role === "assistant") {
+            msg.parts = (msg.parts ?? []).filter((p: any) => {
+              if (p.type === "reasoning" || p.type === "thinking") return false;
+              return true;
+            });
+          }
+          
+          if (!isProtected && msg.info?.role === "tool") {
+            for (const part of (msg.parts ?? [])) {
+              if (part.type === "text" && part.text && part.text.length > 2000) {
+                part.text = part.text.slice(0, 500) + "\n...[truncated]...";
+              }
+            }
+          }
+        }
+        
+        let tagCounter = maxCompartOrd + 1;
+        for (const msg of tail) {
+          tagCounter++;
+          for (const part of (msg.parts ?? [])) {
+            if (part.type === "text" && part.text && !part.text.startsWith("§")) {
+              part.text = `§${tagCounter}§ ${part.text}`;
+              break;
+            }
+          }
+          rendered.push(msg);
+        }
 
         output.messages.length = 0;
         for (const msg of rendered) output.messages.push(msg);
@@ -857,21 +941,105 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         if (historian && tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) {
           const tailStartIdx = Math.max(0, maxCompartOrd + 1);
           const chunkSize = Math.min(12, tailCount);
+          const historianChunkTokens = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
-            const textParts = m.parts.filter((p: any) => p.type === "text");
+            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: m.info.role as string, content, ord: tailStartIdx + idx };
+            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
+          });
+
+          (async () => {
+            try {
+              const childSession = await client.session.create({});
+              if (!childSession.data) return;
+              const childId = childSession.data.id;
+
+              const historianPrompt = `You compress conversation history into three fidelity tiers.
+Output STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }
+
+p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.
+p2: One sentence (≤25 tokens). The single most important thing that happened.
+p3: A title (≤8 tokens). Like a git commit subject.
+
+Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.
+
+CONVERSATION:
+${windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n")}
+
+JSON:`;
+
+              await client.session.promptAsync({
+                path: { id: childId },
+                body: { parts: [{ type: "text", text: historianPrompt }] },
+              });
+
+              await new Promise(r => setTimeout(r, 15000));
+
+              const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+              if (childMsgs.data) {
+                for (const msg of childMsgs.data) {
+                  if (msg.info.role !== "assistant") continue;
+                  for (const part of msg.parts) {
+                    if (part.type !== "text") continue;
+                    const text = (part as { text?: string }).text ?? "";
+                    const jsonMatch = text.match(/\{[\s\S]*\}/);
+                    if (!jsonMatch) continue;
+                    try {
+                      const parsed = JSON.parse(jsonMatch[0]);
+                      if (parsed.p1 && parsed.p2 && parsed.p3) {
+                        compartmentStore.save({
+                          sessionId,
+                          startOrd: windowMsgs[0].ord,
+                          endOrd: windowMsgs[windowMsgs.length - 1].ord,
+                          p1: String(parsed.p1),
+                          p2: String(parsed.p2),
+                          p3: String(parsed.p3),
+                          tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
+                          createdAt: Date.now(),
+                        });
+                      }
+                    } catch {}
+                  }
+                }
+              }
+
+              try { await client.session.delete({ path: { id: childId } }); } catch {}
+            } catch {}
+          })();
+        }
+
+        const proactiveThreshold = 63;
+        const realUsage = getContextUsage(sessionId);
+        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : (messages.length * 500 / contextLimit) * 100;
+        
+        if (usagePct >= 80 && historian && tailCount > 6) {
+          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
+          const chunkSize = Math.min(12, tailCount);
+          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
+            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
+          });
+          const emergencyResult = await (historian as any).compress(sessionId, windowMsgs);
+          if (emergencyResult) compartmentStore.save(emergencyResult);
+        } else if (historian && usagePct >= proactiveThreshold && tailCount > 6 && tailTokensEstimate < triggerBudget * TRIGGER_MULTIPLIER) {
+          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
+          const chunkSize = Math.min(12, tailCount);
+          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
+            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
           });
           setTimeout(async () => {
             try {
               const result = await (historian as any).compress(sessionId, windowMsgs);
               if (result) compartmentStore.save(result);
             } catch {}
-          }, 100);
+          }, 200);
         }
 
-        const afterTokens = Math.round(totalTokens);
-        const beforePct = Math.round((messages.length * 500 / contextLimit) * 100);
+        const afterTokens = rendered.length * 500;
+        const beforePct = realUsage.percentage > 0 ? Math.round(realUsage.percentage) : Math.round((messages.length * 500 / contextLimit) * 100);
         const afterPct = Math.round((afterTokens / contextLimit) * 100);
         setTimeout(async () => {
           try {
@@ -916,16 +1084,14 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           "",
           "## Neural Associative Memory",
           "You have access to a neural associative memory system that finds related concepts by graph traversal, not just keyword match.",
-          "- `neural_recall` — Find memories by ASSOCIATION. Discovers related concepts via spreading activation across a neural graph. Better than keyword search for 'what else relates to X?'",
-          "- `neural_remember` — Store important concepts, decisions, or facts for later associative recall.",
+          "- `neural_recall` — Find memories by ASSOCIATION. Use when you need past knowledge about a topic.",
+          "- `neural_remember` — Store important concepts, decisions, or facts for later recall.",
           "- `neural_note` — Save durable facts/notes (session/project/global scope) that survive compression.",
           "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
           "- `neural_pin` — Pin tagged content to always show at full fidelity.",
-          "- `neural_expand` — Expand compressed/elided content back to full text. When you see `<compartment start=\"N\" end=\"M\">`, call neural_expand(start=N, end=M) to retrieve the original messages. Use this whenever the user asks to see earlier conversation details.",
+          "- `neural_expand` — Expand compressed content back to full text.",
           "",
-          "IMPORTANT: When you are unsure about user preferences, past decisions, project conventions, or anything discussed in previous sessions, ALWAYS call `neural_recall` first to check if relevant knowledge exists in memory. Do not guess — recall first, then act.",
-          "IMPORTANT: When the user shares personal preferences, facts about themselves, decisions, or anything worth remembering long-term (e.g. 'my favorite X is Y', 'I prefer Z', 'remember that...'), ALWAYS call `neural_remember` to store it. This ensures cross-session memory.",
-          "If the user asks about something from another session, use `neural_session_read` to look up that session's conversation directly.",
+          "Use `neural_recall` when you need information from past sessions. Use `neural_remember` when the user shares preferences or important facts worth remembering long-term.",
         ].join("\n");
         output.system.push(usageGuide);
       } catch {}
