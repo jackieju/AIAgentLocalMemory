@@ -1176,7 +1176,8 @@ JSON:`;
 
         if (shouldFireHistorian && maxCompartOrd < messages.length - PROTECTED_TAGS_COUNT - 1) {
           const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-          const chunkSize = Math.min(12, tailCount);
+          const historianChunkTokens = Math.max(8000, Math.min(50000, Math.round(contextLimit * 0.25)));
+          const chunkSize = Math.min(Math.round(historianChunkTokens / 500), tailCount);
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
