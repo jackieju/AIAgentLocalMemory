@@ -1357,14 +1357,14 @@ JSON:`;
           "",
           "## Neural Associative Memory",
           "You have access to a neural associative memory system that finds related concepts by graph traversal, not just keyword match.",
-          "- `neural_recall` — Find memories by ASSOCIATION. Use when you need past knowledge about a topic.",
+          "- `neural_recall` — Find memories by ASSOCIATION. Only use when the user explicitly asks about something from a previous session.",
           "- `neural_remember` — Store important concepts, decisions, or facts for later recall.",
           "- `neural_note` — Save durable facts/notes (session/project/global scope) that survive compression.",
           "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
           "- `neural_pin` — Pin tagged content to always show at full fidelity.",
           "- `neural_expand` — Expand compressed content back to full text.",
           "",
-          "Use `neural_recall` when you need information from past sessions. Use `neural_remember` when the user shares preferences or important facts worth remembering long-term.",
+          "Use `neural_recall` only when the user asks about something from a past session or explicitly says 'remember'. Do NOT call neural_recall on greetings or new conversations. Use `neural_remember` when the user shares preferences or important facts.",
         ].join("\n");
         output.system.push(usageGuide);
       } catch {}
