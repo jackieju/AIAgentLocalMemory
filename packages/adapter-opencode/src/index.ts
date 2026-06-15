@@ -1129,9 +1129,7 @@ JSON:`;
         } else {
           let tailTokens = 0;
           let startIdx = messages.length;
-          let count = 0;
           for (let i = messages.length - 1; i >= tailStart; i--) {
-            if (count >= 200) break;
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
@@ -1143,7 +1141,6 @@ JSON:`;
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
-            count++;
           }
           tail = messages.slice(startIdx);
           if (tail.length === 0) {
@@ -1241,9 +1238,7 @@ JSON:`;
         }
 
         if (rendered.length > 0) {
-          const MAX_RENDER = 200;
-          const final = rendered.length > MAX_RENDER ? rendered.slice(-MAX_RENDER) : rendered;
-          messages.splice(0, messages.length, ...final);
+          messages.splice(0, messages.length, ...rendered);
         }
 
         historianTurnCount++;
