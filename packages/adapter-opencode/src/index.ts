@@ -261,6 +261,52 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }
 
   let syncTimer: ReturnType<typeof setInterval> | null = null;
+  let dreamerTimer: ReturnType<typeof setInterval> | null = null;
+
+  if (historian) {
+    dreamerTimer = setInterval(async () => {
+      try {
+        const recentEpisodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId, limit: 20 });
+        if (recentEpisodes.length < 5) return;
+
+        const existingFacts = await storage.queryNodes({ type: "fact" });
+        const existingFactContents = new Set(existingFacts.map(f => f.content.toLowerCase()));
+
+        const transcript = recentEpisodes
+          .slice(-10)
+          .map(e => e.content.slice(0, 500))
+          .join("\n");
+
+        const extractPrompt = `Extract user preferences, decisions, and constraints from this conversation excerpt.
+Return a JSON array of strings — each string is one standalone fact worth remembering long-term.
+Only extract CLEAR preferences/decisions (e.g. "User prefers TypeScript over JavaScript", "Project uses Bun runtime").
+If nothing worth extracting, return [].
+Do NOT extract opinions, questions, or temporary states.
+
+CONVERSATION:
+${transcript}
+
+JSON:`;
+
+        const response = await historianLlm.complete(extractPrompt, { maxTokens: 300 });
+        if (!response) return;
+
+        const jsonMatch = response.match(/\[[\s\S]*\]/);
+        if (!jsonMatch) return;
+
+        const facts: string[] = JSON.parse(jsonMatch[0]);
+        for (const fact of facts) {
+          if (typeof fact !== "string" || fact.length < 10 || fact.length > 500) continue;
+          if (existingFactContents.has(fact.toLowerCase())) continue;
+          await engine.remember(fact, "fact", {
+            importance: 0.8,
+            metadata: { factData: { scope: "global", activationFloor: 0.5, ready: true } },
+          });
+        }
+      } catch {}
+    }, 10 * 60 * 1000);
+  }
+
   if (existsSync(join(syncDir, ".git"))) {
     syncTimer = setInterval(async () => {
       try {
@@ -289,6 +335,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const renderer = new ContextRenderer(graph, workingMemory, storage, renderConfig);
 
   let turnCounter = 0;
+  const droppedTags = new Set<number>();
 
   const z = tool.schema;
 
@@ -403,6 +450,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         },
         async execute(args) {
           const tags = parseTagRanges(args.drop);
+          for (const t of tags) droppedTags.add(t);
           const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
           let suppressed = 0;
           for (const node of episodes) {
@@ -420,7 +468,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           }
           return {
             title: `Suppressed ${suppressed} tag${suppressed === 1 ? "" : "s"}`,
-            output: `Marked ${suppressed} episodic node(s) as suppressed (requested tags: ${tags.join(", ")}).`,
+            output: `Dropped tags ${tags.join(", ")} from context. Changes take effect next turn.`,
             metadata: { suppressed, requested: tags },
           };
         },
@@ -843,7 +891,18 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const beforeCount = messages.length;
         if (messages.length === 0) return;
 
-        const estimateTokens = (text: string) => Math.ceil(text.length / 3.5);
+        const estimateTokens = (text: string) => {
+          let tokens = 0;
+          for (let i = 0; i < text.length; i++) {
+            const code = text.charCodeAt(i);
+            if (code > 0x4E00 && code < 0x9FFF) tokens += 0.7;
+            else if (code > 0x3000 && code < 0x303F) tokens += 0.5;
+            else if (code > 0xAC00 && code < 0xD7AF) tokens += 0.7;
+            else if (code > 0x3040 && code < 0x30FF) tokens += 0.7;
+            else tokens += 0.28;
+          }
+          return Math.ceil(tokens);
+        };
         const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.15);
         const RECENT_FULL_COUNT = 20;
         const TRIGGER_BUDGET_PCT = 0.05;
@@ -920,6 +979,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         let tagCounter = maxCompartOrd + 1;
         for (const msg of tail) {
           tagCounter++;
+          if (droppedTags.has(tagCounter)) continue;
           for (const part of (msg.parts ?? [])) {
             if (part.type === "text" && part.text && !part.text.startsWith("§")) {
               part.text = `§${tagCounter}§ ${part.text}`;
@@ -940,8 +1000,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         
         if (historian && tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) {
           const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-          const chunkSize = Math.min(12, tailCount);
-          const historianChunkTokens = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
+          if (tailStartIdx > maxCompartOrd) {
+            const chunkSize = Math.min(12, tailCount);
+            const historianChunkTokens = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
@@ -1006,6 +1067,7 @@ JSON:`;
               try { await client.session.delete({ path: { id: childId } }); } catch {}
             } catch {}
           })();
+          }
         }
 
         const proactiveThreshold = 63;
