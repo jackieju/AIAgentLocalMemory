@@ -1064,7 +1064,11 @@ JSON:`;
           for (const msg of messages) {
             for (const part of (msg.parts ?? [])) {
               const text = (part as any).text ?? "";
-              totalTokens += estimateTokens(text);
+              if (text) {
+                totalTokens += estimateTokens(text);
+              } else {
+                totalTokens += Math.ceil(JSON.stringify(part).length * 0.28);
+              }
             }
           }
           return (totalTokens / contextLimit) * 100;
@@ -1131,8 +1135,14 @@ JSON:`;
           for (let i = messages.length - 1; i >= tailStart; i--) {
             let msgTokens = 0;
             for (const part of (messages[i].parts ?? [])) {
-              msgTokens += estimateTokens((part as any).text ?? "");
+              const text = (part as any).text ?? "";
+              if (text) {
+                msgTokens += estimateTokens(text);
+              } else {
+                msgTokens += Math.ceil(JSON.stringify(part).length * 0.28);
+              }
             }
+            msgTokens = Math.max(msgTokens, 4);
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
@@ -1378,7 +1388,17 @@ JSON:`;
           } catch {}
         }, 500);
 
-        const afterPct = Math.round((rendered.length * 500 / contextLimit) * 100);
+        const afterPct = (() => {
+          let totalTokens = 0;
+          for (const msg of rendered) {
+            for (const part of (msg.parts ?? [])) {
+              const text = (part as any).text ?? "";
+              if (text) totalTokens += estimateTokens(text);
+              else totalTokens += Math.ceil(JSON.stringify(part).length * 0.28);
+            }
+          }
+          return Math.round((totalTokens / contextLimit) * 100);
+        })();
         writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
           ts: Date.now(),
           beforePct: Math.round(usagePct || (messages.length * 500 / contextLimit) * 100),
