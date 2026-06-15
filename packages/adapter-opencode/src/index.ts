@@ -978,9 +978,11 @@ JSON:`;
         if (messages.length === 0) return;
 
         const openCodeSessionId = (() => {
-          for (const msg of messages) {
-            const sid = msg.info?.sessionID ?? msg.info?.session_id;
-            if (typeof sid === "string" && sid.length > 0) return sid;
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const msg = messages[i];
+            if (msg.info?.role === "user" && typeof msg.info.sessionID === "string") {
+              return msg.info.sessionID;
+            }
           }
           return sessionId;
         })();
@@ -1308,6 +1310,9 @@ JSON:`;
           compartments: compartments.length,
           scheduler: schedulerDecision,
           historianFailures: historianFailureCount,
+          openCodeSessionId,
+          realUsagePct: realUsage.percentage,
+          msgCount: messages.length,
         }));
       } catch {}
     },
