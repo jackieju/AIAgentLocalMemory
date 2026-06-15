@@ -241,6 +241,49 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     rpcServer.listen(rpcPath);
   } catch {}
 
+  if (historian && openCodeDb) {
+    setTimeout(async () => {
+      try {
+        const sessions = await client.session.list();
+        if (!sessions.data || sessions.data.length === 0) return;
+        const currentSession = sessions.data[0];
+        const sid = currentSession.id;
+        const row = openCodeDb.prepare(`
+          SELECT 
+            COALESCE(json_extract(data, '$.tokens.input'), 0)
+              + COALESCE(json_extract(data, '$.tokens.cache.read'), 0)
+              + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS prompt
+          FROM message
+          WHERE session_id = ?
+            AND json_extract(data, '$.role') = 'assistant'
+            AND data IS NOT NULL
+          ORDER BY time_created DESC
+          LIMIT 1
+        `).get(sid) as { prompt: number } | undefined;
+        if (!row) return;
+        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+        const pct = (row.prompt / contextLimit) * 100;
+        if (pct >= 90) {
+          const maxOrd = compartmentStore.getMaxOrd(sessionId);
+          const msgsResult = await client.session.messages({ path: { id: sid }, query: { limit: 100 } });
+          if (!msgsResult.data) return;
+          const uncovered = msgsResult.data.slice(maxOrd + 1);
+          if (uncovered.length < 6) return;
+          const chunkSize = Math.min(64, uncovered.length - 20);
+          if (chunkSize < 6) return;
+          const windowMsgs = uncovered.slice(0, chunkSize).map((m: any, idx: number) => {
+            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
+            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+            return { role: (m.info?.role ?? "user") as string, content, ord: maxOrd + 1 + idx };
+          });
+          const result = await (historian as any).compress(sessionId, windowMsgs);
+          if (result) compartmentStore.save(result);
+          writeFileSync("/tmp/neural-init-compress.log", JSON.stringify({ ts: Date.now(), pct, chunkSize, success: !!result }));
+        }
+      } catch {}
+    }, 3000);
+  }
+
   setTimeout(async () => {
     try {
       const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } });
