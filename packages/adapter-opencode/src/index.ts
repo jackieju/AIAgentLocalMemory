@@ -1135,7 +1135,10 @@ JSON:`;
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
-              if (text) msgTokens += estimateTokens(text);
+              if (text) {
+                const effectiveLen = Math.min(text.length, 1000);
+                msgTokens += estimateTokens(text.slice(0, effectiveLen));
+              }
             }
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
@@ -1204,17 +1207,16 @@ JSON:`;
 
           if (!isProtected && (msg.info?.role === "tool" || msg.info?.role === "assistant")) {
             for (const part of (msg.parts ?? [])) {
-              if (part.type === "tool_result" || (part.type === "text" && msg.info?.role === "tool")) {
+              if (part.type === "text" || part.type === "tool_result") {
                 const text = part.text ?? "";
-                if (text.length > 2000) {
-                  const toolId = msg.info?.toolCallId ?? msg.info?.id ?? "";
+                if (text.length > 1000) {
                   const hash = text.slice(0, 100);
                   const prevIdx = seenToolOutputs.get(hash);
                   if (prevIdx !== undefined && prevIdx !== i) {
                     part.text = "";
                   } else {
                     seenToolOutputs.set(hash, i);
-                    part.text = text.slice(0, 500) + "\n...[truncated]...";
+                    part.text = text.slice(0, 800) + "\n...[truncated]...";
                   }
                 }
               }
