@@ -167,8 +167,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
     const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
     if (existsSync(openCodeDbPath)) {
-      const SqliteDb = rawStorage.getDb().constructor;
-      openCodeDb = new (SqliteDb as any)(openCodeDbPath, { readonly: true });
+      const mainDb = rawStorage.getDb();
+      mainDb.exec(`ATTACH DATABASE '${openCodeDbPath}' AS opencode`);
+      openCodeDb = mainDb;
     }
   } catch {}
 
@@ -180,7 +181,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           COALESCE(json_extract(data, '$.tokens.input'), 0)
             + COALESCE(json_extract(data, '$.tokens.cache.read'), 0)
             + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS prompt
-        FROM message
+        FROM opencode.message
         WHERE session_id = ?
           AND json_extract(data, '$.role') = 'assistant'
           AND data IS NOT NULL
@@ -253,7 +254,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
             COALESCE(json_extract(data, '$.tokens.input'), 0)
               + COALESCE(json_extract(data, '$.tokens.cache.read'), 0)
               + COALESCE(json_extract(data, '$.tokens.cache.write'), 0) AS prompt
-          FROM message
+          FROM opencode.message
           WHERE session_id = ?
             AND json_extract(data, '$.role') = 'assistant'
             AND data IS NOT NULL
@@ -336,7 +337,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   reconciliationTimer = setInterval(async () => {
     try {
       if (!openCodeDb) return;
-      const row = openCodeDb.prepare(`SELECT COUNT(*) as cnt FROM message WHERE session_id = ?`).get(sessionId) as { cnt: number } | undefined;
+      const row = openCodeDb.prepare(`SELECT COUNT(*) as cnt FROM opencode.message WHERE session_id = ?`).get(sessionId) as { cnt: number } | undefined;
       if (!row || row.cnt === 0) return;
       const storedCount = await storage.getNodeCount();
       if (row.cnt > storedCount * 2) {
