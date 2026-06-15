@@ -1239,6 +1239,8 @@ JSON:`;
 
         if (rendered.length > 0) {
           messages.splice(0, messages.length, ...rendered);
+        } else if (messages.length > 0) {
+          messages.splice(0, messages.length - 1);
         }
 
         historianTurnCount++;
