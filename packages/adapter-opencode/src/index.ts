@@ -12,6 +12,7 @@ interface PluginConfig {
   injectSystemPrompt?: boolean;
   contextWindowTokens?: number;
   budgetRatio?: number;
+  protectedTags?: number;
   coexistWithMagicContext?: boolean;
   syncRepo?: string;
   llm?: {
@@ -336,6 +337,10 @@ JSON:`;
 
   let turnCounter = 0;
   const droppedTags = new Set<number>();
+  let lastModelKey = "";
+  let lastContextPercentage = 0;
+  let reasoningWatermark = 0;
+  let historianFailureCount = 0;
 
   const z = tool.schema;
 
@@ -888,7 +893,6 @@ JSON:`;
       : async (input, output) => {
       try {
         const messages = output.messages ?? [];
-        const beforeCount = messages.length;
         if (messages.length === 0) return;
 
         const estimateTokens = (text: string) => {
@@ -903,44 +907,110 @@ JSON:`;
           }
           return Math.ceil(tokens);
         };
-        const CONTEXT_BUDGET = (pluginConfig.contextWindowTokens ?? 128000) * (pluginConfig.budgetRatio ?? 0.15);
-        const RECENT_FULL_COUNT = 20;
+
+        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+        const EXECUTE_THRESHOLD = 65;
+        const HISTORY_BUDGET_PCT = 0.15;
+        const PROTECTED_TAGS_COUNT = pluginConfig.protectedTags ?? 20;
+        const CLEAR_REASONING_AGE = 50;
         const TRIGGER_BUDGET_PCT = 0.05;
         const TRIGGER_MULTIPLIER = 3;
         const HISTORIAN_CHUNK_PCT = 0.25;
-        const HISTORIAN_CHUNK_MIN = 8000;
-        const HISTORIAN_CHUNK_MAX = 50000;
+        const FORCE_COMPARTMENT_PCT = 80;
+        const ABORT_PCT = 95;
+        const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
+        const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
+
+        const realUsage = getContextUsage(sessionId);
+        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : 0;
+
+        const lastAssistantModel = (() => {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const info = messages[i].info;
+            if (info?.role === "assistant" && info.providerID && info.modelID) {
+              return { providerID: info.providerID, modelID: info.modelID };
+            }
+          }
+          return null;
+        })();
+
+        if (lastAssistantModel && lastModelKey) {
+          const newKey = `${lastAssistantModel.providerID}/${lastAssistantModel.modelID}`;
+          if (lastModelKey !== newKey) {
+            lastModelKey = newKey;
+            lastContextPercentage = 0;
+            reasoningWatermark = 0;
+          }
+        } else if (lastAssistantModel) {
+          lastModelKey = `${lastAssistantModel.providerID}/${lastAssistantModel.modelID}`;
+        }
+
+        if (realUsage.percentage > 0) {
+          lastContextPercentage = realUsage.percentage;
+        }
+
+        const isMidTurn = (() => {
+          if (messages.length === 0) return false;
+          const last = messages[messages.length - 1];
+          return last.info?.role === "assistant" && (last.parts ?? []).some((p: any) => p.type === "tool_call");
+        })();
+
+        let schedulerDecision: "execute" | "defer" | "skip" = "skip";
+        if (usagePct >= EXECUTE_THRESHOLD) {
+          schedulerDecision = isMidTurn ? "defer" : "execute";
+        } else if (usagePct >= EXECUTE_THRESHOLD - 2) {
+          schedulerDecision = "defer";
+        }
 
         let compartments = compartmentStore.getForSession(sessionId);
         let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
 
         const rendered: Array<any> = [];
 
+        let compartmentTokensUsed = 0;
         for (const c of compartments) {
           let text: string;
           const p1Tokens = estimateTokens(c.p1);
-          if (p1Tokens < CONTEXT_BUDGET * 0.3) {
+          if (compartmentTokensUsed + p1Tokens <= historyBudgetTokens) {
             text = c.p1;
+            compartmentTokensUsed += p1Tokens;
           } else {
+            const p2Tokens = estimateTokens(c.p2);
             text = c.p2;
+            compartmentTokensUsed += p2Tokens;
           }
           rendered.push({
             info: { role: "user" },
-            parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}">\n${text}\n</compartment>\n</session-history>` }],
+            parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}" title="${c.p3}">\n${text}\n</compartment>\n</session-history>` }],
           });
         }
 
         const tailStart = maxCompartOrd + 1;
         const tail = messages.slice(tailStart);
-        
-        const PROTECTED_TAIL_MESSAGES = 20;
-        const CLEAR_REASONING_AGE = 50;
-        const protectedStart = Math.max(0, tail.length - PROTECTED_TAIL_MESSAGES);
 
+        let tagCounter = maxCompartOrd + 1;
         let prevTimestamp = 0;
+        const maxTag = maxCompartOrd + tail.length;
+        const protectedFloor = maxTag - PROTECTED_TAGS_COUNT;
+        const reasoningCutoff = maxTag - CLEAR_REASONING_AGE;
+
+        const seenToolOutputs = new Map<string, number>();
+
         for (let i = 0; i < tail.length; i++) {
           const msg = tail[i];
+          tagCounter++;
+
+          if (droppedTags.has(tagCounter)) {
+            rendered.push({
+              info: msg.info,
+              parts: [{ type: "text", text: "" }],
+            });
+            continue;
+          }
+
+          const isProtected = tagCounter > protectedFloor;
           const ts = msg.info?.time?.created ? msg.info.time.created * 1000 : 0;
+
           if (prevTimestamp > 0 && ts > 0 && msg.info?.role === "user") {
             const gap = ts - prevTimestamp;
             if (gap > 5 * 60 * 1000) {
@@ -958,64 +1028,100 @@ JSON:`;
             }
           }
           if (ts > 0) prevTimestamp = ts;
-          const isProtected = i >= protectedStart;
-          
+
           if (!isProtected && msg.info?.role === "assistant") {
-            msg.parts = (msg.parts ?? []).filter((p: any) => {
-              if (p.type === "reasoning" || p.type === "thinking") return false;
-              return true;
-            });
-          }
-          
-          if (!isProtected && msg.info?.role === "tool") {
-            for (const part of (msg.parts ?? [])) {
-              if (part.type === "text" && part.text && part.text.length > 2000) {
-                part.text = part.text.slice(0, 500) + "\n...[truncated]...";
+            if (tagCounter <= reasoningCutoff || tagCounter <= reasoningWatermark) {
+              msg.parts = (msg.parts ?? []).filter((p: any) => {
+                if (p.type === "reasoning" || p.type === "thinking") return false;
+                return true;
+              });
+              if (msg.parts.length === 0) {
+                msg.parts = [{ type: "text", text: "" }];
               }
             }
           }
-        }
-        
-        let tagCounter = maxCompartOrd + 1;
-        for (const msg of tail) {
-          tagCounter++;
-          if (droppedTags.has(tagCounter)) continue;
+
+          if (!isProtected && (msg.info?.role === "tool" || msg.info?.role === "assistant")) {
+            for (const part of (msg.parts ?? [])) {
+              if (part.type === "tool_result" || (part.type === "text" && msg.info?.role === "tool")) {
+                const text = part.text ?? "";
+                if (text.length > 2000) {
+                  const toolId = msg.info?.toolCallId ?? msg.info?.id ?? "";
+                  const hash = text.slice(0, 100);
+                  const prevIdx = seenToolOutputs.get(hash);
+                  if (prevIdx !== undefined && prevIdx !== i) {
+                    part.text = "";
+                  } else {
+                    seenToolOutputs.set(hash, i);
+                    part.text = text.slice(0, 500) + "\n...[truncated]...";
+                  }
+                }
+              }
+            }
+          }
+
           for (const part of (msg.parts ?? [])) {
-            if (part.type === "text" && part.text && !part.text.startsWith("§")) {
+            if (part.type === "text" && part.text !== undefined && part.text !== "" && !part.text.startsWith("§")) {
               part.text = `§${tagCounter}§ ${part.text}`;
               break;
             }
           }
+
           rendered.push(msg);
+        }
+
+        if (schedulerDecision === "execute" && !isMidTurn) {
+          const newWatermark = maxTag - CLEAR_REASONING_AGE;
+          if (newWatermark > reasoningWatermark) {
+            reasoningWatermark = newWatermark;
+          }
         }
 
         output.messages.length = 0;
         for (const msg of rendered) output.messages.push(msg);
 
         historianTurnCount++;
-        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
-        const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
-        const tailCount = Math.max(0, messages.length - RECENT_FULL_COUNT - (maxCompartOrd + 1));
+        const tailCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
         const tailTokensEstimate = tailCount * 500;
-        
-        if (historian && tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) {
+
+        const shouldFireHistorian = (() => {
+          if (!historian) return false;
+          if (usagePct >= FORCE_COMPARTMENT_PCT) return true;
+          if (tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) return true;
+          if (usagePct >= EXECUTE_THRESHOLD - 2 && tailCount > 6) return true;
+          return false;
+        })();
+
+        if (shouldFireHistorian && maxCompartOrd < messages.length - PROTECTED_TAGS_COUNT - 1) {
           const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-          if (tailStartIdx > maxCompartOrd) {
-            const chunkSize = Math.min(12, tailCount);
-            const historianChunkTokens = Math.max(HISTORIAN_CHUNK_MIN, Math.min(HISTORIAN_CHUNK_MAX, Math.round(contextLimit * HISTORIAN_CHUNK_PCT)));
+          const chunkSize = Math.min(12, tailCount);
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
           });
 
-          (async () => {
+          if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             try {
-              const childSession = await client.session.create({});
-              if (!childSession.data) return;
-              const childId = childSession.data.id;
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) compartmentStore.save(result);
+            } catch {}
+          } else if (usagePct >= ABORT_PCT) {
+            try {
+              await client.session.abort?.({ path: { id: sessionId } });
+            } catch {}
+            try {
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) compartmentStore.save(result);
+            } catch {}
+          } else {
+            (async () => {
+              try {
+                const childSession = await client.session.create({});
+                if (!childSession.data) return;
+                const childId = childSession.data.id;
 
-              const historianPrompt = `You compress conversation history into three fidelity tiers.
+                const historianPrompt = `You compress conversation history into three fidelity tiers.
 Output STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }
 
 p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.
@@ -1029,80 +1135,52 @@ ${windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n")}
 
 JSON:`;
 
-              await client.session.promptAsync({
-                path: { id: childId },
-                body: { parts: [{ type: "text", text: historianPrompt }] },
-              });
+                await client.session.promptAsync({
+                  path: { id: childId },
+                  body: { parts: [{ type: "text", text: historianPrompt }] },
+                });
 
-              await new Promise(r => setTimeout(r, 15000));
+                await new Promise(r => setTimeout(r, 15000));
 
-              const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
-              if (childMsgs.data) {
-                for (const msg of childMsgs.data) {
-                  if (msg.info.role !== "assistant") continue;
-                  for (const part of msg.parts) {
-                    if (part.type !== "text") continue;
-                    const text = (part as { text?: string }).text ?? "";
-                    const jsonMatch = text.match(/\{[\s\S]*\}/);
-                    if (!jsonMatch) continue;
-                    try {
-                      const parsed = JSON.parse(jsonMatch[0]);
-                      if (parsed.p1 && parsed.p2 && parsed.p3) {
-                        compartmentStore.save({
-                          sessionId,
-                          startOrd: windowMsgs[0].ord,
-                          endOrd: windowMsgs[windowMsgs.length - 1].ord,
-                          p1: String(parsed.p1),
-                          p2: String(parsed.p2),
-                          p3: String(parsed.p3),
-                          tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
-                          createdAt: Date.now(),
-                        });
+                const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+                if (childMsgs.data) {
+                  for (const msg of childMsgs.data) {
+                    if (msg.info.role !== "assistant") continue;
+                    for (const part of msg.parts) {
+                      if (part.type !== "text") continue;
+                      const text = (part as { text?: string }).text ?? "";
+                      const jsonMatch = text.match(/\{[\s\S]*\}/);
+                      if (!jsonMatch) continue;
+                      try {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        if (parsed.p1 && parsed.p2 && parsed.p3) {
+                          compartmentStore.save({
+                            sessionId,
+                            startOrd: windowMsgs[0].ord,
+                            endOrd: windowMsgs[windowMsgs.length - 1].ord,
+                            p1: String(parsed.p1),
+                            p2: String(parsed.p2),
+                            p3: String(parsed.p3),
+                            tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
+                            createdAt: Date.now(),
+                          });
+                          historianFailureCount = 0;
+                        }
+                      } catch {
+                        historianFailureCount++;
                       }
-                    } catch {}
+                    }
                   }
                 }
-              }
 
-              try { await client.session.delete({ path: { id: childId } }); } catch {}
-            } catch {}
-          })();
+                try { await client.session.delete({ path: { id: childId } }); } catch {}
+              } catch {
+                historianFailureCount++;
+              }
+            })();
           }
         }
 
-        const proactiveThreshold = 63;
-        const realUsage = getContextUsage(sessionId);
-        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : (messages.length * 500 / contextLimit) * 100;
-        
-        if (usagePct >= 80 && historian && tailCount > 6) {
-          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-          const chunkSize = Math.min(12, tailCount);
-          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
-            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
-          });
-          const emergencyResult = await (historian as any).compress(sessionId, windowMsgs);
-          if (emergencyResult) compartmentStore.save(emergencyResult);
-        } else if (historian && usagePct >= proactiveThreshold && tailCount > 6 && tailTokensEstimate < triggerBudget * TRIGGER_MULTIPLIER) {
-          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
-          const chunkSize = Math.min(12, tailCount);
-          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
-            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
-          });
-          setTimeout(async () => {
-            try {
-              const result = await (historian as any).compress(sessionId, windowMsgs);
-              if (result) compartmentStore.save(result);
-            } catch {}
-          }, 200);
-        }
-
-        const afterTokens = rendered.length * 500;
-        const beforePct = realUsage.percentage > 0 ? Math.round(realUsage.percentage) : Math.round((messages.length * 500 / contextLimit) * 100);
-        const afterPct = Math.round((afterTokens / contextLimit) * 100);
         setTimeout(async () => {
           try {
             const linker = new LightweightLinker(rawStorage);
@@ -1110,7 +1188,7 @@ JSON:`;
             for (const msg of lastMsgs) {
               const role = msg.info?.role;
               if (role !== "user" && role !== "assistant") continue;
-              const textParts = msg.parts.filter((p: any) => p.type === "text");
+              const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
               const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
               if (content.length < 10 || content.length > 3000) continue;
               turnCounter++;
@@ -1131,11 +1209,14 @@ JSON:`;
           } catch {}
         }, 500);
 
+        const afterPct = Math.round((rendered.length * 500 / contextLimit) * 100);
         writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
           ts: Date.now(),
-          beforePct,
+          beforePct: Math.round(usagePct || (messages.length * 500 / contextLimit) * 100),
           afterPct,
           compartments: compartments.length,
+          scheduler: schedulerDecision,
+          historianFailures: historianFailureCount,
         }));
       } catch {}
     },
