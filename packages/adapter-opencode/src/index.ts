@@ -1213,7 +1213,8 @@ JSON:`;
           }
         }
 
-        messages.splice(0, messages.length, ...rendered);
+        messages.splice(0, messages.length);
+        writeFileSync("/tmp/neural-splice-test.log", JSON.stringify({ ts: Date.now(), afterSpliceLen: messages.length }));
 
         historianTurnCount++;
         const tailCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
@@ -1356,6 +1357,8 @@ JSON:`;
           openCodeSessionId,
           realUsagePct: realUsage.percentage,
           msgCount: messages.length,
+          renderedCount: rendered.length,
+          msgSizes: messages.slice(0, 5).map((m: any) => JSON.stringify(m.parts ?? []).length),
         }));
       } catch {}
     },
