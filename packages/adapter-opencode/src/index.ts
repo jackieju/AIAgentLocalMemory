@@ -977,6 +977,14 @@ JSON:`;
         const messages = output.messages ?? [];
         if (messages.length === 0) return;
 
+        const openCodeSessionId = (() => {
+          for (const msg of messages) {
+            const sid = msg.info?.sessionID ?? msg.info?.session_id;
+            if (typeof sid === "string" && sid.length > 0) return sid;
+          }
+          return sessionId;
+        })();
+
         const estimateTokens = (text: string) => {
           let tokens = 0;
           for (let i = 0; i < text.length; i++) {
@@ -1003,7 +1011,7 @@ JSON:`;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
-        const realUsage = getContextUsage(sessionId);
+        const realUsage = getContextUsage(openCodeSessionId);
         const usagePct = realUsage.percentage > 0 ? realUsage.percentage : 0;
 
         const lastAssistantModel = (() => {
