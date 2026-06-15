@@ -216,6 +216,31 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     directory,
   }, null, 2));
 
+  let rpcServer: any = null;
+  try {
+    const { createServer } = await import("node:net");
+    const rpcPath = "/tmp/neural-context-rpc.sock";
+    try { const { unlinkSync } = await import("node:fs"); unlinkSync(rpcPath); } catch {}
+    rpcServer = createServer((conn) => {
+      conn.on("data", async (data) => {
+        try {
+          const req = JSON.parse(data.toString());
+          let res: any = {};
+          if (req.method === "status") {
+            const usage = getContextUsage(sessionId);
+            const compartments = compartmentStore.getForSession(sessionId);
+            const nodeCount = await storage.getNodeCount();
+            res = { build: SERVER_BUILD, usage, compartments: compartments.length, nodes: nodeCount, historianFailures: 0, model: "" };
+          } else if (req.method === "compartments") {
+            res = { compartments: compartmentStore.getForSession(sessionId) };
+          }
+          conn.write(JSON.stringify(res) + "\n");
+        } catch { conn.write("{}\n"); }
+      });
+    });
+    rpcServer.listen(rpcPath);
+  } catch {}
+
   setTimeout(async () => {
     try {
       const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } });
