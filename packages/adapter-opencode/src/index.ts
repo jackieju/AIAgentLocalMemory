@@ -467,6 +467,15 @@ JSON:`;
   let lastContextPercentage = 0;
   let reasoningWatermark = 0;
   let historianFailureCount = 0;
+  let lastTailStartIdx = -1;
+  let lastSystemHash = "";
+
+  try {
+    const row = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'reasoning_watermark'`).get() as { value: string } | undefined;
+    if (row) reasoningWatermark = parseInt(row.value) || 0;
+  } catch {
+    try { rawStorage.getDb().exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`); } catch {}
+  }
 
   const z = tool.schema;
 
@@ -1142,6 +1151,12 @@ JSON:`;
             tailTokens += msgTokens;
             startIdx = i;
           }
+
+          if (lastTailStartIdx >= tailStart && lastTailStartIdx <= startIdx + 5 && lastTailStartIdx < messages.length) {
+            startIdx = lastTailStartIdx;
+          }
+          lastTailStartIdx = startIdx;
+
           tail = messages.slice(startIdx);
           if (tail.length === 0) {
             tail = messages.slice(-1);
@@ -1196,6 +1211,11 @@ JSON:`;
                 if (p.type === "reasoning" || p.type === "thinking") return false;
                 return true;
               });
+              for (const part of (msg.parts ?? [])) {
+                if (part.type === "text" && part.text) {
+                  part.text = part.text.replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
+                }
+              }
               if (msg.parts.length === 0) {
                 msg.parts = [{ type: "text", text: "" }];
               }
@@ -1203,17 +1223,27 @@ JSON:`;
           }
 
           if (!isProtected && (msg.info?.role === "tool" || msg.info?.role === "assistant")) {
-            for (const part of (msg.parts ?? [])) {
-              if (part.type === "text" || part.type === "tool_result") {
-                const text = part.text ?? "";
-                if (text.length > 1000) {
-                  const hash = text.slice(0, 100);
-                  const prevIdx = seenToolOutputs.get(hash);
-                  if (prevIdx !== undefined && prevIdx !== i) {
-                    part.text = "";
-                  } else {
-                    seenToolOutputs.set(hash, i);
-                    part.text = text.slice(0, 800) + "\n...[truncated]...";
+            const isErrorResult = (msg.parts ?? []).some((p: any) => p.type === "tool_result" && p.is_error === true);
+            if (isErrorResult && tagCounter <= protectedFloor - 10) {
+              msg.parts = [{ type: "text", text: "" }];
+            } else {
+              for (const part of (msg.parts ?? [])) {
+                if (part.type === "text" || part.type === "tool_result") {
+                  const text = part.text ?? "";
+                  if (text.length > 500) {
+                    const toolName = msg.info?.toolName ?? msg.info?.tool ?? "";
+                    const dedupeKey = `${toolName}:${text.slice(0, 200)}`;
+                    const prevIdx = seenToolOutputs.get(dedupeKey);
+                    if (prevIdx !== undefined && prevIdx !== i) {
+                      part.text = "";
+                    } else {
+                      seenToolOutputs.set(dedupeKey, i);
+                      let compressed = text.slice(0, 800);
+                      compressed = compressed.replace(/\n{3,}/g, "\n\n");
+                      compressed = compressed.replace(/^[ \t]+/gm, "");
+                      compressed = compressed.replace(/(.{1,80})\1{2,}/g, "$1 [×repeated]");
+                      part.text = compressed + (text.length > 800 ? "\n...[truncated]..." : "");
+                    }
                   }
                 }
               }
@@ -1234,6 +1264,9 @@ JSON:`;
           const newWatermark = maxTag - CLEAR_REASONING_AGE;
           if (newWatermark > reasoningWatermark) {
             reasoningWatermark = newWatermark;
+            try {
+              rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('reasoning_watermark', ?)`).run(String(newWatermark));
+            } catch {}
           }
         }
 
@@ -1446,7 +1479,12 @@ JSON:`;
         }
 
         if (blocks.length > 0) {
-          output.system.unshift(blocks.join("\n"));
+          const blockText = blocks.join("\n");
+          const blockHash = createHash("md5").update(blockText).digest("hex");
+          if (blockHash !== lastSystemHash) {
+            lastSystemHash = blockHash;
+          }
+          output.system.unshift(blockText);
         }
       } catch {}
     },
