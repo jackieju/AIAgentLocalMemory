@@ -1053,12 +1053,23 @@ JSON:`;
         const TRIGGER_MULTIPLIER = 3;
         const HISTORIAN_CHUNK_PCT = 0.25;
         const FORCE_COMPARTMENT_PCT = 80;
+        const TARGET_USAGE_PCT = 0.70;
         const ABORT_PCT = 95;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
         const realUsage = getContextUsage(openCodeSessionId);
-        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : 0;
+        const estimatedPct = (() => {
+          let totalTokens = 0;
+          for (const msg of messages) {
+            for (const part of (msg.parts ?? [])) {
+              const text = (part as any).text ?? "";
+              totalTokens += estimateTokens(text);
+            }
+          }
+          return (totalTokens / contextLimit) * 100;
+        })();
+        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : estimatedPct;
 
         const lastAssistantModel = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -1108,20 +1119,34 @@ JSON:`;
         // and double-injection of the same content.
 
         const tailStart = maxCompartOrd + 1;
-        let tail = messages.slice(tailStart);
+        let tail: Array<any>;
 
-        if (tail.length === 0 && compartments.length > 0) {
+        const tailBudgetTokens = Math.round(contextLimit * TARGET_USAGE_PCT);
+        if (messages.length <= tailStart) {
           const lastUserIdx = messages.findLastIndex((m: any) => m.info?.role === "user");
-          if (lastUserIdx >= 0) {
-            tail = messages.slice(lastUserIdx);
-          } else {
+          tail = lastUserIdx >= 0 ? messages.slice(lastUserIdx) : messages.slice(-1);
+        } else {
+          let tailTokens = 0;
+          let startIdx = messages.length;
+          for (let i = messages.length - 1; i >= tailStart; i--) {
+            let msgTokens = 0;
+            for (const part of (messages[i].parts ?? [])) {
+              msgTokens += estimateTokens((part as any).text ?? "");
+            }
+            if (tailTokens + msgTokens > tailBudgetTokens) break;
+            tailTokens += msgTokens;
+            startIdx = i;
+          }
+          tail = messages.slice(startIdx);
+          if (tail.length === 0) {
             tail = messages.slice(-1);
           }
         }
 
-        let tagCounter = maxCompartOrd + 1;
+        const tailActualStart = messages.length - tail.length;
+        let tagCounter = tailActualStart;
         let prevTimestamp = 0;
-        const maxTag = maxCompartOrd + tail.length;
+        const maxTag = tailActualStart + tail.length;
         const protectedFloor = maxTag - PROTECTED_TAGS_COUNT;
         const reasoningCutoff = maxTag - CLEAR_REASONING_AGE;
 
