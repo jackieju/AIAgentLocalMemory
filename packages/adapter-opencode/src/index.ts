@@ -1080,6 +1080,41 @@ JSON:`;
 
     "experimental.chat.system.transform": async (_input, output) => {
       try {
+        const compartments = compartmentStore.getForSession(sessionId);
+        const facts = await storage.queryNodes({ type: "fact" });
+        const relevantFacts = facts.filter((f) => {
+          const fd = f.metadata?.factData as Record<string, unknown> | undefined;
+          if (!fd) return false;
+          if (fd.scope === "session") return f.sourceSession === sessionId;
+          return true;
+        });
+
+        const blocks: string[] = [];
+
+        if (compartments.length > 0) {
+          blocks.push("<session-history>");
+          for (const c of compartments) {
+            blocks.push(`<compartment start="${c.startOrd}" end="${c.endOrd}" title="${c.p3}">`);
+            blocks.push(c.p1);
+            blocks.push("</compartment>");
+          }
+          blocks.push("</session-history>");
+        }
+
+        if (relevantFacts.length > 0) {
+          blocks.push("");
+          blocks.push("<project-memory>");
+          for (const f of relevantFacts) {
+            const fd = f.metadata?.factData as Record<string, unknown> | undefined;
+            blocks.push(`  <memory id="${f.id.slice(0, 8)}" category="${fd?.scope ?? "global"}">${f.content}</memory>`);
+          }
+          blocks.push("</project-memory>");
+        }
+
+        if (blocks.length > 0) {
+          output.system.unshift(blocks.join("\n"));
+        }
+
         const usageGuide = [
           "",
           "## Neural Associative Memory",
