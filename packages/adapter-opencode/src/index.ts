@@ -1365,6 +1365,8 @@ JSON:`;
           "- `neural_expand` — Expand compressed content back to full text.",
           "",
           "Use `neural_recall` only when the user asks about something from a past session or explicitly says 'remember'. Do NOT call neural_recall on greetings or new conversations. Use `neural_remember` when the user shares preferences or important facts.",
+          "",
+          "Always respond in the same language the user uses.",
         ].join("\n");
         output.system.push(usageGuide);
       } catch {}
