@@ -1062,13 +1062,10 @@ JSON:`;
         const estimatedPct = (() => {
           let totalTokens = 0;
           for (const msg of messages) {
+            totalTokens += 10;
             for (const part of (msg.parts ?? [])) {
               const text = (part as any).text ?? "";
-              if (text) {
-                totalTokens += estimateTokens(text);
-              } else {
-                totalTokens += Math.ceil(JSON.stringify(part).length * 0.28);
-              }
+              if (text) totalTokens += estimateTokens(text);
             }
           }
           return (totalTokens / contextLimit) * 100;
@@ -1133,16 +1130,11 @@ JSON:`;
           let tailTokens = 0;
           let startIdx = messages.length;
           for (let i = messages.length - 1; i >= tailStart; i--) {
-            let msgTokens = 0;
+            let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
-              if (text) {
-                msgTokens += estimateTokens(text);
-              } else {
-                msgTokens += Math.ceil(JSON.stringify(part).length * 0.28);
-              }
+              if (text) msgTokens += estimateTokens(text);
             }
-            msgTokens = Math.max(msgTokens, 4);
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
@@ -1391,10 +1383,10 @@ JSON:`;
         const afterPct = (() => {
           let totalTokens = 0;
           for (const msg of rendered) {
+            totalTokens += 10;
             for (const part of (msg.parts ?? [])) {
               const text = (part as any).text ?? "";
               if (text) totalTokens += estimateTokens(text);
-              else totalTokens += Math.ceil(JSON.stringify(part).length * 0.28);
             }
           }
           return Math.round((totalTokens / contextLimit) * 100);
