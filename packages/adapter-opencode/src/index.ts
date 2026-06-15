@@ -1407,6 +1407,9 @@ JSON:`;
           msgSizes: messages.slice(0, 5).map((m: any) => JSON.stringify(m.parts ?? []).length),
         }));
       } catch {}
+      if (output.messages && output.messages.length === 0) {
+        output.messages.push({ info: { role: "user" }, parts: [{ type: "text", text: "." }] });
+      }
     },
 
     "experimental.chat.system.transform": async (_input, output) => {
