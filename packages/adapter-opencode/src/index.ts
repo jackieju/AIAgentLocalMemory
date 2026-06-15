@@ -1108,7 +1108,16 @@ JSON:`;
         // and double-injection of the same content.
 
         const tailStart = maxCompartOrd + 1;
-        const tail = messages.slice(tailStart);
+        let tail = messages.slice(tailStart);
+
+        if (tail.length === 0 && compartments.length > 0) {
+          const lastUserIdx = messages.findLastIndex((m: any) => m.info?.role === "user");
+          if (lastUserIdx >= 0) {
+            tail = messages.slice(lastUserIdx);
+          } else {
+            tail = messages.slice(-1);
+          }
+        }
 
         let tagCounter = maxCompartOrd + 1;
         let prevTimestamp = 0;
