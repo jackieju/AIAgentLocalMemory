@@ -1018,8 +1018,8 @@ JSON:`;
       ? undefined
       : async (input, output) => {
       try {
-        const messages = output.messages ?? [];
-        if (messages.length === 0) return;
+        const messages = output.messages;
+        if (!messages || messages.length === 0) return;
 
         const openCodeSessionId = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -1213,8 +1213,7 @@ JSON:`;
           }
         }
 
-        output.messages.length = 0;
-        for (const msg of rendered) output.messages.push(msg);
+        messages.splice(0, messages.length, ...rendered);
 
         historianTurnCount++;
         const tailCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
