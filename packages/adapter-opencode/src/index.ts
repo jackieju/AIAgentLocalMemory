@@ -1103,23 +1103,9 @@ JSON:`;
 
         const rendered: Array<any> = [];
 
-        let compartmentTokensUsed = 0;
-        for (const c of compartments) {
-          let text: string;
-          const p1Tokens = estimateTokens(c.p1);
-          if (compartmentTokensUsed + p1Tokens <= historyBudgetTokens) {
-            text = c.p1;
-            compartmentTokensUsed += p1Tokens;
-          } else {
-            const p2Tokens = estimateTokens(c.p2);
-            text = c.p2;
-            compartmentTokensUsed += p2Tokens;
-          }
-          rendered.push({
-            info: { role: "user" },
-            parts: [{ type: "text", text: `<session-history>\n<compartment start="${c.startOrd}" end="${c.endOrd}" title="${c.p3}">\n${text}\n</compartment>\n</session-history>` }],
-          });
-        }
+        // Compartments are injected via system.transform — NOT as fake user messages here.
+        // This avoids LLM language confusion (English summaries as "user" messages)
+        // and double-injection of the same content.
 
         const tailStart = maxCompartOrd + 1;
         const tail = messages.slice(tailStart);
@@ -1268,6 +1254,7 @@ p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/sy
 p2: One sentence (≤25 tokens). The single most important thing that happened.
 p3: A title (≤8 tokens). Like a git commit subject.
 
+IMPORTANT: Write p1, p2, p3 in the SAME LANGUAGE the user uses in the conversation. If user writes Chinese, output Chinese. If English, output English.
 Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.
 
 CONVERSATION:
@@ -1305,6 +1292,14 @@ JSON:`;
                             createdAt: Date.now(),
                           });
                           historianFailureCount = 0;
+
+                          try {
+                            await engine.remember(
+                              `[${parsed.p3}] ${parsed.p1}`,
+                              "episode",
+                              { importance: 0.6, metadata: { sourceSession: sessionId, startOrd: windowMsgs[0].ord, endOrd: windowMsgs[windowMsgs.length - 1].ord } }
+                            );
+                          } catch {}
                         }
                       } catch {
                         historianFailureCount++;
