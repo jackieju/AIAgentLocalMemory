@@ -1339,36 +1339,6 @@ JSON:`;
         if (blocks.length > 0) {
           output.system.unshift(blocks.join("\n"));
         }
-
-        const lastSystem = output.system[output.system.length - 1];
-        if (lastSystem && typeof lastSystem === "string" && lastSystem.length > 20) {
-          const keywords = lastSystem.slice(-200).split(/\s+/).filter(w => w.length > 3).slice(0, 5).join(" ");
-          if (keywords.length > 10) {
-            const searchResults = await storage.search(keywords, 3);
-            const related = searchResults.filter(n => n.type === "concept" || n.type === "assertion" || n.type === "fact");
-            if (related.length > 0) {
-              const memoryLines = related.map(n => `- [${n.type}] ${n.content}`);
-              output.system.push(`\n## Auto-recalled memories\n${memoryLines.join("\n")}`);
-            }
-          }
-        }
-
-        const usageGuide = [
-          "",
-          "## Neural Associative Memory",
-          "You have access to a neural associative memory system that finds related concepts by graph traversal, not just keyword match.",
-          "- `neural_recall` — Find memories by ASSOCIATION. Only use when the user explicitly asks about something from a previous session.",
-          "- `neural_remember` — Store important concepts, decisions, or facts for later recall.",
-          "- `neural_note` — Save durable facts/notes (session/project/global scope) that survive compression.",
-          "- `neural_reduce` — Drop tagged content (e.g. neural_reduce(drop=\"3-5\")).",
-          "- `neural_pin` — Pin tagged content to always show at full fidelity.",
-          "- `neural_expand` — Expand compressed content back to full text.",
-          "",
-          "Use `neural_recall` only when the user asks about something from a past session or explicitly says 'remember'. Do NOT call neural_recall on greetings or new conversations. Use `neural_remember` when the user shares preferences or important facts.",
-          "",
-          "Always respond in the same language the user uses.",
-        ].join("\n");
-        output.system.push(usageGuide);
       } catch {}
     },
 
