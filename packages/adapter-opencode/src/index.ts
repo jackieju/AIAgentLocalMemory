@@ -263,6 +263,38 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   let syncTimer: ReturnType<typeof setInterval> | null = null;
   let dreamerTimer: ReturnType<typeof setInterval> | null = null;
+  let reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+
+  reconciliationTimer = setInterval(async () => {
+    try {
+      if (!openCodeDb) return;
+      const row = openCodeDb.prepare(`SELECT COUNT(*) as cnt FROM message WHERE session_id = ?`).get(sessionId) as { cnt: number } | undefined;
+      if (!row || row.cnt === 0) return;
+      const storedCount = await storage.getNodeCount();
+      if (row.cnt > storedCount * 2) {
+        const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 10 } });
+        if (!msgsResult.data) return;
+        for (const msg of msgsResult.data.slice(-5)) {
+          const role = msg.info.role;
+          if (role !== "user" && role !== "assistant") continue;
+          const textParts = msg.parts.filter((p: any) => p.type === "text");
+          const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+          if (content.length < 10 || content.length > 3000) continue;
+          await storage.putNode({
+            id: crypto.randomUUID(),
+            type: "episode",
+            content: content.slice(0, 2000),
+            importance: role === "user" ? 0.6 : 0.5,
+            strength: 0.5,
+            accessCount: 0,
+            lastAccessed: Date.now(),
+            createdAt: Date.now(),
+            sourceSession: sessionId,
+          });
+        }
+      }
+    } catch {}
+  }, 5 * 60 * 1000);
 
   if (historian) {
     dreamerTimer = setInterval(async () => {
@@ -302,6 +334,31 @@ JSON:`;
           await engine.remember(fact, "fact", {
             importance: 0.8,
             metadata: { factData: { scope: "global", activationFloor: 0.5, ready: true } },
+          });
+        }
+
+        const filePathRegex = /(?:\/[\w.-]+)+\.\w+/g;
+        const fileCounts = new Map<string, number>();
+        for (const ep of recentEpisodes) {
+          const matches = ep.content.match(filePathRegex);
+          if (matches) {
+            for (const m of matches) {
+              fileCounts.set(m, (fileCounts.get(m) ?? 0) + 1);
+            }
+          }
+        }
+        const keyFiles = [...fileCounts.entries()]
+          .filter(([, count]) => count >= 3)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 5)
+          .map(([path]) => path);
+
+        for (const filePath of keyFiles) {
+          const factContent = `Key file: ${filePath}`;
+          if (existingFactContents.has(factContent.toLowerCase())) continue;
+          await engine.remember(factContent, "fact", {
+            importance: 0.7,
+            metadata: { factData: { scope: "session", activationFloor: 0.3, ready: true, keyFile: true } },
           });
         }
       } catch {}
@@ -1258,6 +1315,19 @@ JSON:`;
           output.system.unshift(blocks.join("\n"));
         }
 
+        const lastSystem = output.system[output.system.length - 1];
+        if (lastSystem && typeof lastSystem === "string" && lastSystem.length > 20) {
+          const keywords = lastSystem.slice(-200).split(/\s+/).filter(w => w.length > 3).slice(0, 5).join(" ");
+          if (keywords.length > 10) {
+            const searchResults = await storage.search(keywords, 3);
+            const related = searchResults.filter(n => n.type === "concept" || n.type === "assertion" || n.type === "fact");
+            if (related.length > 0) {
+              const memoryLines = related.map(n => `- [${n.type}] ${n.content}`);
+              output.system.push(`\n## Auto-recalled memories\n${memoryLines.join("\n")}`);
+            }
+          }
+        }
+
         const usageGuide = [
           "",
           "## Neural Associative Memory",
@@ -1272,6 +1342,52 @@ JSON:`;
           "Use `neural_recall` when you need information from past sessions. Use `neural_remember` when the user shares preferences or important facts worth remembering long-term.",
         ].join("\n");
         output.system.push(usageGuide);
+      } catch {}
+    },
+
+    "command.execute.before": async (input: any, output: any) => {
+      try {
+        const command = input?.command;
+        if (command === "ctx-status" || command === "neural-status") {
+          const usage = getContextUsage(sessionId);
+          const compartments = compartmentStore.getForSession(sessionId);
+          const stats = await engine.getStats();
+          output.response = [
+            `## Neural Context Status`,
+            `Context: ${usage.percentage.toFixed(1)}% (${usage.inputTokens} tokens)`,
+            `Nodes: ${stats.nodeCount} | Edges: ${stats.edgeCount}`,
+            `Compartments: ${compartments.length}`,
+            `Historian failures: ${historianFailureCount}`,
+            `Reasoning watermark: ${reasoningWatermark}`,
+            `Model: ${lastModelKey || "unknown"}`,
+          ].join("\n");
+          output.handled = true;
+        } else if (command === "ctx-recomp" || command === "neural-recomp") {
+          if (historian) {
+            const messages = (await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } })).data ?? [];
+            const maxOrd = compartmentStore.getMaxOrd(sessionId);
+            const uncovered = messages.slice(maxOrd + 1, maxOrd + 13);
+            const windowMsgs = uncovered.map((m: any, idx: number) => {
+              const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
+              const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+              return { role: m.info.role as string, content, ord: maxOrd + 1 + idx };
+            });
+            if (windowMsgs.length >= 6) {
+              const result = await (historian as any).compress(sessionId, windowMsgs);
+              if (result) {
+                compartmentStore.save(result);
+                output.response = `Recompacted: created compartment covering ordinals ${result.startOrd}-${result.endOrd}`;
+              } else {
+                output.response = "Recompaction failed — historian returned null.";
+              }
+            } else {
+              output.response = "Not enough uncovered messages to recompact (need >= 6).";
+            }
+          } else {
+            output.response = "Historian not available (no LLM configured).";
+          }
+          output.handled = true;
+        }
       } catch {}
     },
   };
