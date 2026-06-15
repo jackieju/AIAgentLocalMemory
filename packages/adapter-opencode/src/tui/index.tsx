@@ -8,7 +8,25 @@ import { execSync } from "node:child_process"
 import { Database } from "bun:sqlite"
 
 const VERSION = "0.4.1"
-const BUILD_NUMBER = (() => {
+
+function rpcQuery(method: string): any {
+  try {
+    const { createConnection } = require("node:net")
+    const conn = createConnection("/tmp/neural-context-rpc.sock")
+    conn.write(JSON.stringify({ method }))
+    const chunks: Buffer[] = []
+    conn.on("data", (d: Buffer) => chunks.push(d))
+    conn.end()
+    const data = Buffer.concat(chunks).toString().trim()
+    return data ? JSON.parse(data) : null
+  } catch {
+    return null
+  }
+}
+
+function getServerBuild(): string {
+  const rpcResult = rpcQuery("status")
+  if (rpcResult?.build) return rpcResult.build
   try {
     const bnPath = "/tmp/neural-server-build.txt"
     if (existsSync(bnPath)) {
@@ -18,7 +36,9 @@ const BUILD_NUMBER = (() => {
     }
   } catch {}
   return "?"
-})()
+}
+
+const BUILD_NUMBER = getServerBuild()
 const BUILD_TIME = (() => {
   try {
     const distPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/dist/index.js")
