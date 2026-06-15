@@ -167,8 +167,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
     const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
     if (existsSync(openCodeDbPath)) {
-      const { Database: BunDB } = await import("bun:sqlite");
-      openCodeDb = new BunDB(openCodeDbPath, { readonly: true });
+      const SqliteDb = rawStorage.getDb().constructor;
+      openCodeDb = new (SqliteDb as any)(openCodeDbPath, { readonly: true });
     }
   } catch {}
 
