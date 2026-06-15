@@ -1213,8 +1213,10 @@ JSON:`;
           }
         }
 
-        messages.splice(0, messages.length);
-        writeFileSync("/tmp/neural-splice-test.log", JSON.stringify({ ts: Date.now(), afterSpliceLen: messages.length }));
+        if (rendered.length > 0) {
+          messages.length = 0;
+          for (const msg of rendered) messages.push(msg);
+        }
 
         historianTurnCount++;
         const tailCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
