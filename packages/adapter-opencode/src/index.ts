@@ -1171,16 +1171,42 @@ JSON:`;
         const reasoningCutoff = maxTag - CLEAR_REASONING_AGE;
 
         const seenToolOutputs = new Map<string, number>();
+        const toolFingerprints = new Map<string, number[]>();
 
+        for (let i = 0; i < tail.length; i++) {
+          const msg = tail[i];
+          if (msg.info?.role === "tool" || ((msg.parts ?? []).some((p: any) => p.type === "tool_call"))) {
+            const toolName = msg.info?.toolName ?? msg.info?.tool ?? (msg.parts ?? []).find((p: any) => p.type === "tool_call")?.name ?? "";
+            const inputText = (msg.parts ?? []).map((p: any) => p.text ?? JSON.stringify(p.input ?? "")).join("").slice(0, 300);
+            const fingerprint = `${toolName}:${inputText}`;
+            const group = toolFingerprints.get(fingerprint) ?? [];
+            group.push(i);
+            toolFingerprints.set(fingerprint, group);
+          }
+        }
+
+        const toolDropIndices = new Set<number>();
+        for (const [, indices] of toolFingerprints) {
+          if (indices.length <= 1) continue;
+          for (let k = 0; k < indices.length - 1; k++) {
+            const idx = indices[k];
+            if (tailActualStart + idx <= protectedFloor) {
+              toolDropIndices.add(idx);
+            }
+          }
+        }
+
+        let prevRole = "";
         for (let i = 0; i < tail.length; i++) {
           const msg = tail[i];
           tagCounter++;
 
-          if (droppedTags.has(tagCounter)) {
+          if (droppedTags.has(tagCounter) || toolDropIndices.has(i)) {
             rendered.push({
               info: msg.info,
               parts: [{ type: "text", text: "" }],
             });
+            prevRole = msg.info?.role ?? "";
             continue;
           }
 
@@ -1207,62 +1233,56 @@ JSON:`;
 
           if (!isProtected && msg.info?.role === "assistant") {
             if (tagCounter <= reasoningCutoff || tagCounter <= reasoningWatermark) {
-              msg.parts = (msg.parts ?? []).filter((p: any) => {
-                if (p.type === "reasoning" || p.type === "thinking") return false;
-                return true;
-              });
-              for (const part of (msg.parts ?? [])) {
-                if (part.type === "text" && part.text) {
-                  part.text = part.text.replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
+              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
+                const part = msg.parts[pi];
+                if (part.type === "reasoning" || part.type === "thinking") {
+                  msg.parts[pi] = { type: "text", text: "" };
                 }
               }
-              if (msg.parts.length === 0 || msg.parts.every((p: any) => !p.text && p.type === "text")) {
-                msg.parts = [{ type: "text", text: "" }];
+              for (const part of (msg.parts ?? [])) {
+                if (part.type === "text" && part.text) {
+                  part.text = part.text.replace(/<(?:thinking|think)>[\s\S]*?<\/(?:thinking|think)>\s*/g, "").trim();
+                }
               }
             }
-          }
 
-          if (!isProtected && msg.info?.role === "assistant" && tagCounter > reasoningCutoff) {
-            for (const part of (msg.parts ?? [])) {
-              if (part.type === "reasoning" || part.type === "thinking") {
-                const reasoningText = part.text ?? part.thinking ?? "";
-                if (reasoningText.length > 2000) {
-                  part.text = reasoningText.slice(0, 500) + "\n...[reasoning truncated]...";
-                  if (part.thinking) part.thinking = part.text;
+            const firstInRun = prevRole !== "assistant";
+            if (!firstInRun) {
+              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
+                const part = msg.parts[pi];
+                if (part.type === "reasoning" || part.type === "thinking") {
+                  msg.parts[pi] = { type: "text", text: "" };
                 }
               }
             }
           }
 
           if (!isProtected && (msg.info?.role === "tool" || msg.info?.role === "assistant")) {
-            const isErrorResult = (msg.parts ?? []).some((p: any) => p.type === "tool_result" && p.is_error === true);
-            if (isErrorResult && tagCounter <= protectedFloor - 10) {
-              msg.parts = [{ type: "text", text: "" }];
-            } else {
-              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
-                const part = msg.parts[pi];
-                if (part.type === "text" || part.type === "tool_result") {
-                  const text = part.text ?? "";
-                  if (text.length > 300) {
-                    const toolName = msg.info?.toolName ?? msg.info?.tool ?? "";
-                    const fullHash = `${toolName}:${text}`;
-                    const dedupeKey = `${toolName}:${text.slice(0, 200)}`;
-                    const prevIdx = seenToolOutputs.get(dedupeKey);
-                    if (prevIdx !== undefined && prevIdx !== i) {
-                      part.text = "";
-                    } else {
-                      seenToolOutputs.set(dedupeKey, i);
-                      let compressed = text.slice(0, 600);
-                      compressed = compressed.replace(/\n{3,}/g, "\n\n");
-                      compressed = compressed.replace(/^[ \t]+/gm, "");
-                      compressed = compressed.replace(/(.{1,80})\1{2,}/g, "$1 [×repeated]");
-                      part.text = compressed + (text.length > 600 ? "\n...[truncated]..." : "");
-                    }
+            for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
+              const part = msg.parts[pi];
+              if (part.type === "tool" && part.state?.status === "error" && typeof part.state.error === "string" && part.state.error.length > 100) {
+                part.state.error = part.state.error.slice(0, 100) + "... [truncated]";
+              }
+              if (part.type === "text" || part.type === "tool_result") {
+                const text = part.text ?? "";
+                if (text.length > 300) {
+                  const toolName = msg.info?.toolName ?? msg.info?.tool ?? "";
+                  const dedupeKey = `${toolName}:${text.slice(0, 200)}`;
+                  const prevIdx = seenToolOutputs.get(dedupeKey);
+                  if (prevIdx !== undefined && prevIdx !== i) {
+                    part.text = "";
+                  } else {
+                    seenToolOutputs.set(dedupeKey, i);
+                    let compressed = text.slice(0, 600);
+                    compressed = compressed.replace(/\n{3,}/g, "\n\n");
+                    compressed = compressed.replace(/^[ \t]+/gm, "");
+                    compressed = compressed.replace(/(.{1,80})\1{2,}/g, "$1 [×repeated]");
+                    part.text = compressed + (text.length > 600 ? "\n...[truncated]..." : "");
                   }
                 }
-                if (part.type === "tool_call" && part.name === "neural_reduce" && tagCounter <= protectedFloor - 5) {
-                  msg.parts[pi] = { type: "text", text: "" };
-                }
+              }
+              if (part.type === "tool_call" && part.name === "neural_reduce" && tagCounter <= protectedFloor - 5) {
+                msg.parts[pi] = { type: "text", text: "" };
               }
             }
           }
@@ -1275,6 +1295,7 @@ JSON:`;
           }
 
           rendered.push(msg);
+          prevRole = msg.info?.role ?? "";
         }
 
         if (schedulerDecision === "execute" && !isMidTurn) {
