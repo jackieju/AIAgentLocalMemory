@@ -1530,8 +1530,14 @@ JSON:`;
           msgSizes: messages.slice(0, 5).map((m: any) => JSON.stringify(m.parts ?? []).length),
         }));
       } catch {}
-      if (output.messages && output.messages.length === 0) {
-        output.messages.push({ info: { role: "user" }, parts: [{ type: "text", text: "." }] });
+      if (output.messages) {
+        const hasContent = output.messages.some((m: any) =>
+          (m.parts ?? []).some((p: any) => p.type === "text" && p.text && p.text.trim().length > 0)
+        );
+        if (!hasContent) {
+          output.messages.length = 0;
+          output.messages.push({ info: { role: "user" }, parts: [{ type: "text", text: "." }] });
+        }
       }
     },
 
