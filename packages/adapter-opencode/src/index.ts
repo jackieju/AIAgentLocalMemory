@@ -1543,7 +1543,6 @@ JSON:`;
 
     "experimental.chat.system.transform": async (_input, output) => {
       try {
-        const compartments = compartmentStore.getForSession(sessionId);
         const facts = await storage.queryNodes({ type: "fact" });
         const relevantFacts = facts.filter((f) => {
           const fd = f.metadata?.factData as Record<string, unknown> | undefined;
@@ -1554,14 +1553,17 @@ JSON:`;
 
         const blocks: string[] = [];
 
-        if (compartments.length > 0) {
-          blocks.push("<session-history>");
-          for (const c of compartments) {
-            blocks.push(`<compartment start="${c.startOrd}" end="${c.endOrd}" title="${c.p3}">`);
-            blocks.push(c.p1);
-            blocks.push("</compartment>");
+        if (!magicContextPresent) {
+          const compartments = compartmentStore.getForSession(sessionId);
+          if (compartments.length > 0) {
+            blocks.push("<session-history>");
+            for (const c of compartments) {
+              blocks.push(`<compartment start="${c.startOrd}" end="${c.endOrd}" title="${c.p3}">`);
+              blocks.push(c.p1);
+              blocks.push("</compartment>");
+            }
+            blocks.push("</session-history>");
           }
-          blocks.push("</session-history>");
         }
 
         if (relevantFacts.length > 0) {
