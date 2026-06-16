@@ -1062,7 +1062,7 @@ JSON:`;
         const TRIGGER_MULTIPLIER = 3;
         const HISTORIAN_CHUNK_PCT = 0.25;
         const FORCE_COMPARTMENT_PCT = 80;
-        const TARGET_USAGE_PCT = 0.40;
+        const TARGET_USAGE_PCT = 0.55;
         const ABORT_PCT = 95;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
@@ -1143,10 +1143,8 @@ JSON:`;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
               if (text) {
-                const effectiveLen = Math.min(text.length, 600);
+                const effectiveLen = Math.min(text.length, 1000);
                 msgTokens += estimateTokens(text.slice(0, effectiveLen));
-              } else {
-                msgTokens += 50;
               }
             }
             if (tailTokens + msgTokens > tailBudgetTokens) break;
