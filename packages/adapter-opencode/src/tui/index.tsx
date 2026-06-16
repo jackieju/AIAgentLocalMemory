@@ -11,12 +11,14 @@ const VERSION = "0.4.1"
 
 function rpcQuery(method: string): any {
   try {
-    const bnPath = "/tmp/neural-server-build.txt"
-    if (!existsSync(bnPath)) return null
-    const mtime = statSync(bnPath).mtime.getTime()
-    if (Date.now() - mtime > 30 * 60 * 1000) return null
-    const build = readFileSync(bnPath, "utf-8").trim()
-    return { build }
+    const { createConnection } = require("node:net")
+    const conn = createConnection("/tmp/neural-context-rpc.sock")
+    conn.write(JSON.stringify({ method }))
+    const chunks: Buffer[] = []
+    conn.on("data", (d: Buffer) => chunks.push(d))
+    conn.end()
+    const data = Buffer.concat(chunks).toString().trim()
+    return data ? JSON.parse(data) : null
   } catch {
     return null
   }
