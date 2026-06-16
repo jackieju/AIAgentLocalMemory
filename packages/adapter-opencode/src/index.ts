@@ -1062,7 +1062,7 @@ JSON:`;
         const TRIGGER_MULTIPLIER = 3;
         const HISTORIAN_CHUNK_PCT = 0.25;
         const FORCE_COMPARTMENT_PCT = 80;
-        const TARGET_USAGE_PCT = 0.70;
+        const TARGET_USAGE_PCT = 0.55;
         const ABORT_PCT = 95;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
@@ -1216,8 +1216,20 @@ JSON:`;
                   part.text = part.text.replace(/<thinking>[\s\S]*?<\/thinking>/g, "").trim();
                 }
               }
-              if (msg.parts.length === 0) {
+              if (msg.parts.length === 0 || msg.parts.every((p: any) => !p.text && p.type === "text")) {
                 msg.parts = [{ type: "text", text: "" }];
+              }
+            }
+          }
+
+          if (!isProtected && msg.info?.role === "assistant" && tagCounter > reasoningCutoff) {
+            for (const part of (msg.parts ?? [])) {
+              if (part.type === "reasoning" || part.type === "thinking") {
+                const reasoningText = part.text ?? part.thinking ?? "";
+                if (reasoningText.length > 2000) {
+                  part.text = reasoningText.slice(0, 500) + "\n...[reasoning truncated]...";
+                  if (part.thinking) part.thinking = part.text;
+                }
               }
             }
           }
@@ -1227,24 +1239,29 @@ JSON:`;
             if (isErrorResult && tagCounter <= protectedFloor - 10) {
               msg.parts = [{ type: "text", text: "" }];
             } else {
-              for (const part of (msg.parts ?? [])) {
+              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
+                const part = msg.parts[pi];
                 if (part.type === "text" || part.type === "tool_result") {
                   const text = part.text ?? "";
-                  if (text.length > 500) {
+                  if (text.length > 300) {
                     const toolName = msg.info?.toolName ?? msg.info?.tool ?? "";
+                    const fullHash = `${toolName}:${text}`;
                     const dedupeKey = `${toolName}:${text.slice(0, 200)}`;
                     const prevIdx = seenToolOutputs.get(dedupeKey);
                     if (prevIdx !== undefined && prevIdx !== i) {
                       part.text = "";
                     } else {
                       seenToolOutputs.set(dedupeKey, i);
-                      let compressed = text.slice(0, 800);
+                      let compressed = text.slice(0, 600);
                       compressed = compressed.replace(/\n{3,}/g, "\n\n");
                       compressed = compressed.replace(/^[ \t]+/gm, "");
                       compressed = compressed.replace(/(.{1,80})\1{2,}/g, "$1 [×repeated]");
-                      part.text = compressed + (text.length > 800 ? "\n...[truncated]..." : "");
+                      part.text = compressed + (text.length > 600 ? "\n...[truncated]..." : "");
                     }
                   }
+                }
+                if (part.type === "tool_call" && part.name === "neural_reduce" && tagCounter <= protectedFloor - 5) {
+                  msg.parts[pi] = { type: "text", text: "" };
                 }
               }
             }
