@@ -1053,6 +1053,29 @@ JSON:`;
           return Math.ceil(tokens);
         };
 
+        const FILLER_WORDS = /\b(basically|actually|really|just|very|quite|pretty|somewhat|certainly|definitely|obviously|clearly|simply|literally|honestly|frankly|anyway|so|well|now|then|also|still|already|even)\b/gi;
+        const HEDGING = /\b(I think|I believe|I would say|it seems like|it appears that|in my opinion|from my perspective|if you will|sort of|kind of|more or less|to be honest|at the end of the day)\b/gi;
+        const PLEASANTRIES = /\b(please|thanks|thank you|kindly|if possible)\b/gi;
+
+        const cavemanCompress = (text: string, level: "lite" | "full" | "ultra"): string => {
+          let w = text;
+          w = w.replace(FILLER_WORDS, "");
+          w = w.replace(HEDGING, "");
+          w = w.replace(PLEASANTRIES, "");
+          if (level === "full" || level === "ultra") {
+            w = w.replace(/\b(the|a|an)\b/gi, "");
+            w = w.replace(/\b(is|are|was|were|has been|have been|will be|would be|could be|should be)\b/gi, "");
+          }
+          if (level === "ultra") {
+            w = w.replace(/\b(however|therefore|furthermore|additionally|moreover|nevertheless|consequently)\b/gi, "→");
+            w = w.replace(/\bfor example\b/gi, "eg");
+            w = w.replace(/\bin order to\b/gi, "to");
+            w = w.replace(/\bas well as\b/gi, "&");
+          }
+          w = w.replace(/  +/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+          return w;
+        };
+
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
         const EXECUTE_THRESHOLD = 65;
         const HISTORY_BUDGET_PCT = 0.15;
@@ -1192,6 +1215,35 @@ JSON:`;
             const idx = indices[k];
             if (tailActualStart + idx <= protectedFloor) {
               toolDropIndices.add(idx);
+            }
+          }
+        }
+
+        const STRUCTURAL_NOISE_TYPES = new Set(["meta", "step-start", "step-finish"]);
+
+        for (let i = 0; i < tail.length; i++) {
+          const msg = tail[i];
+          for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
+            const part = msg.parts[pi];
+            if (STRUCTURAL_NOISE_TYPES.has(part?.type)) {
+              msg.parts[pi] = { type: "text", text: "" };
+            }
+          }
+        }
+
+        const cavemanEligibleCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
+        for (let i = 0; i < cavemanEligibleCount; i++) {
+          const msg = tail[i];
+          if (msg.info?.role !== "user" && msg.info?.role !== "assistant") continue;
+          const fraction = i / cavemanEligibleCount;
+          let level: "lite" | "full" | "ultra" | null = null;
+          if (fraction < 0.2) level = "ultra";
+          else if (fraction < 0.4) level = "full";
+          else if (fraction < 0.6) level = "lite";
+          if (!level) continue;
+          for (const part of (msg.parts ?? [])) {
+            if (part.type === "text" && part.text && part.text.length > 200) {
+              part.text = cavemanCompress(part.text, level);
             }
           }
         }
