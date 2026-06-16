@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createSignal, onCleanup } from "solid-js"
 import type { TuiPlugin, TuiSlotPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { execSync } from "node:child_process"
@@ -9,46 +9,15 @@ import { Database } from "bun:sqlite"
 
 const VERSION = "0.4.1"
 
-function rpcQuery(method: string): any {
-  try {
-    const { createConnection } = require("node:net")
-    const conn = createConnection("/tmp/neural-context-rpc.sock")
-    conn.write(JSON.stringify({ method }))
-    const chunks: Buffer[] = []
-    conn.on("data", (d: Buffer) => chunks.push(d))
-    conn.end()
-    const data = Buffer.concat(chunks).toString().trim()
-    return data ? JSON.parse(data) : null
-  } catch {
-    return null
-  }
-}
-
 function getServerBuild(): string {
-  const rpcResult = rpcQuery("status")
-  if (rpcResult?.build) return rpcResult.build
   try {
     const bnPath = "/tmp/neural-server-build.txt"
     if (existsSync(bnPath)) {
-      const mtime = statSync(bnPath).mtime.getTime()
-      if (Date.now() - mtime > 5 * 60 * 1000) return "?"
       return readFileSync(bnPath, "utf-8").trim()
     }
   } catch {}
   return "?"
 }
-
-const BUILD_NUMBER = getServerBuild()
-const BUILD_TIME = (() => {
-  try {
-    const distPath = join(homedir(), "Desktop/ju/projects/AIAgentLocalMemory/packages/adapter-opencode/dist/index.js")
-    if (existsSync(distPath)) {
-      const mtime = statSync(distPath).mtime
-      return mtime.toISOString().slice(0, 19).replace("T", " ")
-    }
-  } catch {}
-  return "unknown"
-})()
 
 type Stats = {
   nodeCount: number
@@ -59,14 +28,10 @@ type Stats = {
   syncRepo: string
   lastSync: string
   compartmentStatus: { ts: number; beforePct: number; afterPct: number; compartments: number } | null
-  serverActive: boolean
   build: string
 }
 
 function getStats(): Stats {
-  const rpcResult = rpcQuery("status")
-  const serverActive = rpcResult?.build != null
-
   const dataDir = join(homedir(), ".local/share/ai-agent-local-memory")
   const dbPath = join(dataDir, "graph.db")
   const syncDir = join(dataDir, "sync")
@@ -116,7 +81,7 @@ function getStats(): Stats {
     }
   } catch {}
 
-  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, serverActive, build: rpcResult?.build ?? BUILD_NUMBER }
+  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, build: getServerBuild() }
 }
 
 function formatRepo(url: string): string {
@@ -141,7 +106,7 @@ function formatLastSync(iso: string): string {
   return `${days}d ago`
 }
 
-function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
+function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
   return {
     order: 200,
     slots: {
@@ -150,6 +115,11 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
 
         const timer = setInterval(() => setStats(getStats()), 30000)
         onCleanup(() => clearInterval(timer))
+
+        const isActive = (() => {
+          const plugins = api.plugins.list()
+          return plugins.some(p => p.id === "ai-agent-local-memory" && p.active)
+        })()
 
         return (
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
@@ -177,7 +147,7 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
             <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} b{stats().build} | {stats().serverActive ? "🟢 active" : "🔴 inactive"}</text>
+            <text fg="#64748b">v{VERSION} b{stats().build} | {isActive ? "🟢 Active" : "🔴 Inactive"}</text>
           </box>
         )
       },
