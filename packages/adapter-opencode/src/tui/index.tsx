@@ -59,9 +59,14 @@ type Stats = {
   syncRepo: string
   lastSync: string
   compartmentStatus: { ts: number; beforePct: number; afterPct: number; compartments: number } | null
+  serverActive: boolean
+  build: string
 }
 
 function getStats(): Stats {
+  const rpcResult = rpcQuery("status")
+  const serverActive = rpcResult?.build != null
+
   const dataDir = join(homedir(), ".local/share/ai-agent-local-memory")
   const dbPath = join(dataDir, "graph.db")
   const syncDir = join(dataDir, "sync")
@@ -111,7 +116,7 @@ function getStats(): Stats {
     }
   } catch {}
 
-  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus }
+  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, serverActive, build: rpcResult?.build ?? BUILD_NUMBER }
 }
 
 function formatRepo(url: string): string {
@@ -172,7 +177,7 @@ function createSidebarSlot(_api: TuiPluginApi): TuiSlotPlugin {
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
             <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} b{BUILD_NUMBER} | {BUILD_TIME}</text>
+            <text fg="#64748b">v{VERSION} b{stats().build} | {stats().serverActive ? "🟢 active" : "🔴 inactive"}</text>
           </box>
         )
       },
