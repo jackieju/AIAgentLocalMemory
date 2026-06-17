@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { createSignal, onCleanup } from "solid-js"
 import type { TuiPlugin, TuiSlotPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { execSync } from "node:child_process"
@@ -112,23 +112,17 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
     slots: {
       sidebar_content: (props) => {
         const [stats, setStats] = createSignal<Stats>(getStats())
+        const [active, setActive] = createSignal(false)
 
         const timer = setInterval(() => setStats(getStats()), 30000)
         onCleanup(() => clearInterval(timer))
 
-        const isActive = (() => {
+        (async () => {
           try {
-            const initPath = "/tmp/neural-plugin-init.log"
-            if (!existsSync(initPath)) return false
-            const initMtime = statSync(initPath).mtime.getTime()
-            if (Date.now() - initMtime > 30 * 60 * 1000) return false
-            const statusPath = "/tmp/neural-compartment-status.json"
-            if (existsSync(statusPath)) {
-              const statusMtime = statSync(statusPath).mtime.getTime()
-              if (Date.now() - statusMtime < 120000) return true
-            }
-            return Date.now() - initMtime < 120000
-          } catch { return false }
+            const result = await (api.client as any).tool.ids()
+            const ids: string[] = result?.data ?? []
+            setActive(ids.includes("neural_status"))
+          } catch { setActive(false) }
         })()
 
         return (
@@ -157,7 +151,7 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
             <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} b{stats().build} | {isActive ? "🟢 Active" : "🔴 Inactive"}</text>
+            <text fg="#64748b">v{VERSION} b{stats().build} | {active() ? "🟢 Active" : "🔴 Inactive"}</text>
           </box>
         )
       },
