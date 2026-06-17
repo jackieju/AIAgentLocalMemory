@@ -118,8 +118,7 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
 
         const isActive = (() => {
           const plugins = api.plugins.list()
-          const ours = plugins.find(p => p.id === "ai-agent-local-memory" && p.target === "server")
-          return ours?.active ?? false
+          return plugins.some(p => p.id === "ai-agent-local-memory" && p.active && p.enabled)
         })()
 
         return (
