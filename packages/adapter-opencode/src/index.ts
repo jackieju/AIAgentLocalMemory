@@ -1632,6 +1632,32 @@ JSON:`;
         }
       } catch {}
     },
+
+    event: async (input: any) => {
+      try {
+        if (input?.event?.type !== "session.idle") return;
+        const sid = input.event.properties?.sessionID;
+        if (!sid) return;
+
+        const msgsResult = await client.session.messages({ path: { id: sid }, query: {} });
+        if (!msgsResult.data) return;
+
+        const lines: string[] = [];
+        for (const msg of msgsResult.data) {
+          const role = msg.info.role;
+          const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
+          const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+          if (!content) continue;
+          lines.push(`[${role}] ${content}\n`);
+        }
+
+        const transcriptDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "transcripts");
+        const { mkdirSync } = await import("node:fs");
+        mkdirSync(transcriptDir, { recursive: true });
+        const transcriptPath = join(transcriptDir, `${sid}.md`);
+        writeFileSync(transcriptPath, lines.join("\n---\n\n"));
+      } catch {}
+    },
   };
 };
 
