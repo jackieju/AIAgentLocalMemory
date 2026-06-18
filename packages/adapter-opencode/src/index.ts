@@ -469,10 +469,13 @@ JSON:`;
   let historianFailureCount = 0;
   let lastTailStartIdx = -1;
   let lastSystemHash = "";
+  let lastCompressTime = 0;
 
   try {
     const row = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'reasoning_watermark'`).get() as { value: string } | undefined;
     if (row) reasoningWatermark = parseInt(row.value) || 0;
+    const row2 = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'last_compress_time'`).get() as { value: string } | undefined;
+    if (row2) lastCompressTime = parseInt(row2.value) || 0;
   } catch {
     try { rawStorage.getDb().exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`); } catch {}
   }
@@ -1370,8 +1373,18 @@ JSON:`;
         const tailCount = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
         const tailTokensEstimate = tailCount * 500;
 
+        const hasUncoveredNewMessages = (() => {
+          if (lastCompressTime === 0) return false;
+          for (let i = maxCompartOrd + 1; i < messages.length; i++) {
+            const msgTime = messages[i].info?.time?.created ? messages[i].info.time.created * 1000 : 0;
+            if (msgTime > lastCompressTime) return true;
+          }
+          return false;
+        })();
+
         const shouldFireHistorian = (() => {
           if (!historian) return false;
+          if (hasUncoveredNewMessages && tailCount > 6) return true;
           if (usagePct >= FORCE_COMPARTMENT_PCT) return true;
           if (tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) return true;
           if (usagePct >= EXECUTE_THRESHOLD - 2 && tailCount > 6) return true;
@@ -1391,7 +1404,11 @@ JSON:`;
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             try {
               const result = await (historian as any).compress(sessionId, windowMsgs);
-              if (result) compartmentStore.save(result);
+              if (result) {
+                compartmentStore.save(result);
+                lastCompressTime = Date.now();
+                try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+              }
             } catch {}
           } else if (usagePct >= ABORT_PCT) {
             try {
@@ -1399,7 +1416,11 @@ JSON:`;
             } catch {}
             try {
               const result = await (historian as any).compress(sessionId, windowMsgs);
-              if (result) compartmentStore.save(result);
+              if (result) {
+                compartmentStore.save(result);
+                lastCompressTime = Date.now();
+                try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+              }
             } catch {}
           } else {
             (async () => {
@@ -1453,6 +1474,8 @@ JSON:`;
                             createdAt: Date.now(),
                           });
                           historianFailureCount = 0;
+                          lastCompressTime = Date.now();
+                          try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
 
                           try {
                             await engine.remember(
