@@ -117,18 +117,9 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
     slots: {
       sidebar_content: (props) => {
         const [stats, setStats] = createSignal<Stats>(getStats())
-        const [active, setActive] = createSignal(false)
 
         const timer = setInterval(() => setStats(getStats()), 30000)
         onCleanup(() => clearInterval(timer))
-
-        (async () => {
-          try {
-            const result = await (api.client as any).tool.ids()
-            const ids: string[] = result?.data ?? []
-            setActive(ids.includes("neural_status"))
-          } catch { setActive(false) }
-        })()
 
         return (
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
@@ -156,7 +147,7 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
             <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} b{stats().build} | {active() ? "🟢 Active" : "🔴 Inactive"}</text>
+            <text fg="#64748b">v{VERSION} b{stats().build}</text>
           </box>
         )
       },
