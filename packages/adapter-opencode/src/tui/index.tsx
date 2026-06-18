@@ -5,7 +5,11 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 import { execSync } from "node:child_process"
-import { Database } from "bun:sqlite"
+
+let Database: any = null
+try { Database = require("bun:sqlite").Database } catch {
+  try { Database = require("better-sqlite3") } catch {}
+}
 
 const VERSION = "0.4.1"
 
@@ -43,6 +47,7 @@ function getStats(): Stats {
   const types: Record<string, number> = {}
 
   try {
+    if (!Database) throw new Error("no sqlite")
     const db = new Database(dbPath, { readonly: true })
     nodeCount = (db.query("SELECT COUNT(*) as c FROM nodes").get() as { c: number }).c
     edgeCount = (db.query("SELECT COUNT(*) as c FROM synapses").get() as { c: number }).c
