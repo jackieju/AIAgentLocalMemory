@@ -1635,8 +1635,12 @@ JSON:`;
 
     event: async (input: any) => {
       try {
-        if (input?.event?.type !== "session.idle") return;
-        const sid = input.event.properties?.sessionID;
+        const eventType = input?.event?.type ?? "unknown";
+        if (eventType !== "session.status") return;
+        const props = input.event.properties;
+        if (props?.status?.type !== "idle") return;
+        const sid = props?.sessionID;
+        if (!sid) return;
         if (!sid) return;
 
         const transcriptDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "transcripts");
