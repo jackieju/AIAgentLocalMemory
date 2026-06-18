@@ -1639,23 +1639,31 @@ JSON:`;
         const sid = input.event.properties?.sessionID;
         if (!sid) return;
 
+        const transcriptDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "transcripts");
+        const { mkdirSync } = await import("node:fs");
+        mkdirSync(transcriptDir, { recursive: true });
+        const transcriptPath = join(transcriptDir, `${sid}.md`);
+
+        const existingLines = existsSync(transcriptPath) ? readFileSync(transcriptPath, "utf-8").split("\n").length : 0;
+
         const msgsResult = await client.session.messages({ path: { id: sid }, query: {} });
         if (!msgsResult.data) return;
 
-        const lines: string[] = [];
+        const allMessages: string[] = [];
         for (const msg of msgsResult.data) {
           const role = msg.info.role;
           const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
           const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
           if (!content) continue;
-          lines.push(`[${role}] ${content}\n`);
+          allMessages.push(`[${role}] ${content}\n\n---\n`);
         }
 
-        const transcriptDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "transcripts");
-        const { mkdirSync } = await import("node:fs");
-        mkdirSync(transcriptDir, { recursive: true });
-        const transcriptPath = join(transcriptDir, `${sid}.md`);
-        writeFileSync(transcriptPath, lines.join("\n---\n\n"));
+        const fullContent = allMessages.join("\n");
+        const newLineCount = fullContent.split("\n").length;
+
+        if (newLineCount > existingLines) {
+          writeFileSync(transcriptPath, fullContent);
+        }
       } catch {}
     },
   };
