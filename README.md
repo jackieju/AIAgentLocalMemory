@@ -362,6 +362,7 @@ Storage contents:
 ├── graph.db-wal      ← WAL journal (may not exist when idle)
 ├── graph.db-shm      ← shared memory (may not exist when idle)
 ├── episodes/         ← raw session JSON files (original conversation text)
+├── transcripts/      ← auto-synced chat transcripts (one file per session)
 └── backups/          ← created by neural_backup tool
 ```
 
@@ -443,6 +444,32 @@ operations.jsonl (append-only log — synced via Git)
 The operation log is the source of truth for sync. `graph.db` is a materialized view that can be rebuilt from the log at any time.
 
 ## Backup
+
+### Session Transcripts
+
+Every time OpenCode finishes responding (session enters idle state), the full chat history is automatically written to:
+
+```
+~/.local/share/ai-agent-local-memory/transcripts/<sessionId>.md
+```
+
+The file stays in sync with the session — each idle event checks for new content and updates the file. Format:
+
+```markdown
+[user] How do I fix the auth bug?
+
+---
+
+[assistant] Looking at the auth module...
+
+---
+
+[tool] { result of tool call }
+
+---
+```
+
+This gives you a persistent, readable copy of every conversation that survives even if the session is deleted from OpenCode.
 
 ### Via Tool (in OpenCode)
 
