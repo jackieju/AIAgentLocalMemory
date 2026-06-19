@@ -470,6 +470,7 @@ JSON:`;
   let lastTailStartIdx = -1;
   let lastSystemHash = "";
   let lastCompressTime = 0;
+  let currentOpenCodeSessionId = "";
 
   try {
     const row = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'reasoning_watermark'`).get() as { value: string } | undefined;
@@ -1042,6 +1043,7 @@ JSON:`;
           }
           return sessionId;
         })();
+        currentOpenCodeSessionId = openCodeSessionId;
 
         const estimateTokens = (text: string) => {
           let tokens = 0;
@@ -1145,7 +1147,7 @@ JSON:`;
           schedulerDecision = "defer";
         }
 
-        let compartments = compartmentStore.getForSession(sessionId);
+        let compartments = compartmentStore.getForSession(openCodeSessionId);
         let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
 
         const rendered: Array<any> = [];
@@ -1403,7 +1405,7 @@ JSON:`;
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             try {
-              const result = await (historian as any).compress(sessionId, windowMsgs);
+              const result = await (historian as any).compress(openCodeSessionId, windowMsgs);
               if (result) {
                 compartmentStore.save(result);
                 lastCompressTime = Date.now();
@@ -1415,7 +1417,7 @@ JSON:`;
               await client.session.abort?.({ path: { id: sessionId } });
             } catch {}
             try {
-              const result = await (historian as any).compress(sessionId, windowMsgs);
+              const result = await (historian as any).compress(openCodeSessionId, windowMsgs);
               if (result) {
                 compartmentStore.save(result);
                 lastCompressTime = Date.now();
@@ -1464,7 +1466,7 @@ JSON:`;
                         const parsed = JSON.parse(jsonMatch[0]);
                         if (parsed.p1 && parsed.p2 && parsed.p3) {
                           compartmentStore.save({
-                            sessionId,
+                            sessionId: openCodeSessionId,
                             startOrd: windowMsgs[0].ord,
                             endOrd: windowMsgs[windowMsgs.length - 1].ord,
                             p1: String(parsed.p1),
@@ -1577,7 +1579,8 @@ JSON:`;
         const blocks: string[] = [];
 
         if (!magicContextPresent) {
-          const compartments = compartmentStore.getForSession(sessionId);
+          const sysSessionId = currentOpenCodeSessionId || sessionId;
+          const compartments = compartmentStore.getForSession(sysSessionId);
           if (compartments.length > 0) {
             blocks.push("<session-history>");
             for (const c of compartments) {
