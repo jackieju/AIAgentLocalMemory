@@ -459,37 +459,34 @@ JSON:`;
       const { execSync } = await import("node:child_process");
       const { hostname } = await import("node:os");
 
-      const lastBackupFile = join(syncDir, ".last-session-backup");
+      const lastBackupFile = join(sessionBackupDir, ".last-session-backup");
+      mkdirSync(sessionBackupDir, { recursive: true });
       const lastBackup = existsSync(lastBackupFile) ? parseInt(readFileSync(lastBackupFile, "utf-8")) || 0 : 0;
       if (Date.now() - lastBackup < 24 * 60 * 60 * 1000) return;
-
-      if (!existsSync(join(syncDir, ".git"))) return;
-
-      const hostDir = join(syncDir, "session-backup", hostname());
-      mkdirSync(hostDir, { recursive: true });
 
       const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
       const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
       if (!existsSync(openCodeDbPath)) return;
 
+      const icloudDir = join(homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs", "opencode-backup", hostname());
+      mkdirSync(icloudDir, { recursive: true });
+
       const dayLabel = new Date().toISOString().slice(0, 10);
-      const backupFile = join(hostDir, `opencode-${dayLabel}.db.gz`);
+      const backupFile = join(icloudDir, `opencode-${dayLabel}.db.gz`);
 
       execSync(`gzip -c "${openCodeDbPath}" > "${backupFile}"`, { stdio: "ignore" });
 
       const configDir = join(homedir(), '.config', 'opencode');
       for (const f of ['opencode.jsonc', 'opencode.json', 'neural-context.json']) {
         const src = join(configDir, f);
-        if (existsSync(src)) copyFileSync(src, join(hostDir, f));
+        if (existsSync(src)) copyFileSync(src, join(icloudDir, f));
       }
 
-      const files = readdirSync(hostDir).filter(f => f.startsWith("opencode-") && f.endsWith(".db.gz")).sort();
+      const files = readdirSync(icloudDir).filter(f => f.startsWith("opencode-") && f.endsWith(".db.gz")).sort();
       while (files.length > 5) {
         const old = files.shift()!;
-        try { unlinkSync(join(hostDir, old)); } catch {}
+        try { unlinkSync(join(icloudDir, old)); } catch {}
       }
-
-      execSync('git add -A && git commit -m "session-backup: auto" --allow-empty && git push', { cwd: syncDir, stdio: "ignore" });
 
       writeFileSync(lastBackupFile, String(Date.now()));
     } catch {}
