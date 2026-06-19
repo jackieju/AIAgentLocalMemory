@@ -453,19 +453,11 @@ JSON:`;
   }
 
   const sessionBackupDir = join(dataBase, 'ai-agent-local-memory', 'session-backup');
-  const sessionBackupRepo = pluginConfig.syncRepo;
   setTimeout(async () => {
     try {
-      const { mkdirSync, copyFileSync } = await import("node:fs");
+      const { mkdirSync, copyFileSync, readdirSync, unlinkSync } = await import("node:fs");
       const { execSync } = await import("node:child_process");
       mkdirSync(sessionBackupDir, { recursive: true });
-
-      if (!existsSync(join(sessionBackupDir, ".git"))) {
-        execSync("git init", { cwd: sessionBackupDir, stdio: "ignore" });
-        if (sessionBackupRepo) {
-          try { execSync(`git remote add origin ${sessionBackupRepo.replace("myaimemorystore", "opencode-sessions")}`, { cwd: sessionBackupDir, stdio: "ignore" }); } catch {}
-        }
-      }
 
       const lastBackupFile = join(sessionBackupDir, ".last-backup");
       const lastBackup = existsSync(lastBackupFile) ? parseInt(readFileSync(lastBackupFile, "utf-8")) || 0 : 0;
@@ -475,8 +467,10 @@ JSON:`;
       const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
       if (!existsSync(openCodeDbPath)) return;
 
-      const backupDbPath = join(sessionBackupDir, 'opencode.db');
-      copyFileSync(openCodeDbPath, backupDbPath);
+      const dayLabel = new Date().toISOString().slice(0, 10);
+      const backupFile = join(sessionBackupDir, `opencode-${dayLabel}.db.gz`);
+
+      execSync(`gzip -c "${openCodeDbPath}" > "${backupFile}"`, { stdio: "ignore" });
 
       const configDir = join(homedir(), '.config', 'opencode');
       for (const f of ['opencode.jsonc', 'opencode.json', 'neural-context.json']) {
@@ -484,8 +478,11 @@ JSON:`;
         if (existsSync(src)) copyFileSync(src, join(sessionBackupDir, f));
       }
 
-      execSync('git add -A && git commit -m "daily backup" --allow-empty', { cwd: sessionBackupDir, stdio: "ignore" });
-      try { execSync("git push", { cwd: sessionBackupDir, stdio: "ignore" }); } catch {}
+      const files = readdirSync(sessionBackupDir).filter(f => f.startsWith("opencode-") && f.endsWith(".db.gz")).sort();
+      while (files.length > 5) {
+        const old = files.shift()!;
+        try { unlinkSync(join(sessionBackupDir, old)); } catch {}
+      }
 
       writeFileSync(lastBackupFile, String(Date.now()));
     } catch {}
