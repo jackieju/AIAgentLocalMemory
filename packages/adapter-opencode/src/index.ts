@@ -455,9 +455,8 @@ JSON:`;
   const sessionBackupDir = join(dataBase, 'ai-agent-local-memory', 'session-backup');
   setTimeout(async () => {
     try {
-      const { mkdirSync, copyFileSync, readdirSync, unlinkSync } = await import("node:fs");
+      const { mkdirSync, copyFileSync } = await import("node:fs");
       const { execSync } = await import("node:child_process");
-      const { hostname } = await import("node:os");
 
       const lastBackupFile = join(sessionBackupDir, ".last-session-backup");
       mkdirSync(sessionBackupDir, { recursive: true });
@@ -468,24 +467,16 @@ JSON:`;
       const openCodeDbPath = join(xdgData, 'opencode', 'opencode.db');
       if (!existsSync(openCodeDbPath)) return;
 
-      const icloudDir = join(homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs", "opencode-backup", hostname());
+      const icloudDir = join(homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs", "opencode-backup");
       mkdirSync(icloudDir, { recursive: true });
 
-      const dayLabel = new Date().toISOString().slice(0, 10);
-      const backupFile = join(icloudDir, `opencode-${dayLabel}.db.gz`);
-
+      const backupFile = join(icloudDir, "opencode.db.gz");
       execSync(`gzip -c "${openCodeDbPath}" > "${backupFile}"`, { stdio: "ignore" });
 
       const configDir = join(homedir(), '.config', 'opencode');
       for (const f of ['opencode.jsonc', 'opencode.json', 'neural-context.json']) {
         const src = join(configDir, f);
         if (existsSync(src)) copyFileSync(src, join(icloudDir, f));
-      }
-
-      const files = readdirSync(icloudDir).filter(f => f.startsWith("opencode-") && f.endsWith(".db.gz")).sort();
-      while (files.length > 5) {
-        const old = files.shift()!;
-        try { unlinkSync(join(icloudDir, old)); } catch {}
       }
 
       writeFileSync(lastBackupFile, String(Date.now()));
