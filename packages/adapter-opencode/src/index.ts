@@ -1440,7 +1440,7 @@ JSON:`;
             } catch {}
             try {
               const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
               const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
               if (result) {
                 compartmentStore.save(result);
@@ -1454,7 +1454,7 @@ JSON:`;
             } catch {}
             try {
               const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
               const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
               if (result) {
                 compartmentStore.save(result);
