@@ -1436,7 +1436,12 @@ JSON:`;
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             try {
-              const result = await (historian as any).compress(openCodeSessionId, windowMsgs);
+              await client.session.chat?.({ path: { id: openCodeSessionId }, body: { parts: [{ type: "text", text: "⏳ Context at " + Math.round(usagePct) + "% — compressing history before continuing..." }] } }).catch(() => {});
+            } catch {}
+            try {
+              const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
+              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+              const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
               if (result) {
                 compartmentStore.save(result);
                 lastCompressTime = Date.now();
@@ -1448,7 +1453,9 @@ JSON:`;
               await client.session.abort?.({ path: { id: sessionId } });
             } catch {}
             try {
-              const result = await (historian as any).compress(openCodeSessionId, windowMsgs);
+              const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
+              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000));
+              const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
               if (result) {
                 compartmentStore.save(result);
                 lastCompressTime = Date.now();
