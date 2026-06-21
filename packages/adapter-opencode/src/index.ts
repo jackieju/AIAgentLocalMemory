@@ -1435,9 +1435,7 @@ JSON:`;
           });
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
-            try {
-              await client.session.chat?.({ path: { id: openCodeSessionId }, body: { parts: [{ type: "text", text: "⏳ Context at " + Math.round(usagePct) + "% — compressing history before continuing..." }] } }).catch(() => {});
-            } catch {}
+            writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history...`);
             try {
               const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
               const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
