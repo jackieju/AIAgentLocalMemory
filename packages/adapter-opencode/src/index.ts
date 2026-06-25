@@ -287,7 +287,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   setTimeout(async () => {
     try {
-      const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } });
+      if (!currentOpenCodeSessionId) return;
+      const msgsResult = await client.session.messages({ path: { id: currentOpenCodeSessionId }, query: { limit: 50 } });
       if (!msgsResult.data || msgsResult.data.length === 0) return;
       for (const msg of msgsResult.data.slice(-20)) {
         const role = msg.info.role;
@@ -341,7 +342,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       if (!row || row.cnt === 0) return;
       const storedCount = await storage.getNodeCount();
       if (row.cnt > storedCount * 2) {
-        const msgsResult = await client.session.messages({ path: { id: sessionId }, query: { limit: 10 } });
+        if (!currentOpenCodeSessionId) return;
+        const msgsResult = await client.session.messages({ path: { id: currentOpenCodeSessionId }, query: { limit: 10 } });
         if (!msgsResult.data) return;
         for (const msg of msgsResult.data.slice(-5)) {
           const role = msg.info.role;
@@ -689,7 +691,8 @@ JSON:`;
         async execute(args) {
           if (args.start !== undefined && args.end !== undefined) {
             try {
-              const msgsResult = await client.session.messages({ path: { id: sessionId }, query: {} });
+              const expandSessionId = currentOpenCodeSessionId || sessionId;
+              const msgsResult = await client.session.messages({ path: { id: expandSessionId }, query: {} });
               if (!msgsResult.data) return { title: "Error", output: "Failed to read session messages." };
               
               const allMsgs = msgsResult.data;
@@ -1398,6 +1401,14 @@ JSON:`;
 
         if (rendered.length > 0) {
           messages.splice(0, messages.length, ...rendered);
+          try {
+            writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
+              ts: Date.now(),
+              renderedCount: rendered.length,
+              firstMsg: rendered[0] ? { role: rendered[0].info?.role, partsCount: rendered[0].parts?.length, partTypes: (rendered[0].parts ?? []).map((p: any) => p.type) } : null,
+              lastMsg: rendered[rendered.length - 1] ? { role: rendered[rendered.length - 1].info?.role, partsCount: rendered[rendered.length - 1].parts?.length, partTypes: (rendered[rendered.length - 1].parts ?? []).map((p: any) => p.type) } : null,
+            }, null, 2));
+          } catch {}
         } else if (messages.length > 0) {
           messages.splice(0, messages.length - 1);
         }
@@ -1448,7 +1459,7 @@ JSON:`;
             } catch {}
           } else if (usagePct >= ABORT_PCT) {
             try {
-              await client.session.abort?.({ path: { id: sessionId } });
+              await client.session.abort?.({ path: { id: currentOpenCodeSessionId || sessionId } });
             } catch {}
             try {
               const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
@@ -1604,7 +1615,9 @@ JSON:`;
 
     "experimental.chat.system.transform": async (_input, output) => {
       try {
+        writeFileSync("/tmp/neural-system-transform.log", `${Date.now()} start\n`);
         const facts = await storage.queryNodes({ type: "fact" });
+        writeFileSync("/tmp/neural-system-transform.log", `${Date.now()} facts=${facts.length}\n`);
         const relevantFacts = facts.filter((f) => {
           const fd = f.metadata?.factData as Record<string, unknown> | undefined;
           if (!fd) return false;
@@ -1668,7 +1681,7 @@ JSON:`;
           output.handled = true;
         } else if (command === "ctx-recomp" || command === "neural-recomp") {
           if (historian) {
-            const messages = (await client.session.messages({ path: { id: sessionId }, query: { limit: 50 } })).data ?? [];
+            const messages = (await client.session.messages({ path: { id: currentOpenCodeSessionId || sessionId }, query: { limit: 50 } })).data ?? [];
             const maxOrd = compartmentStore.getMaxOrd(sessionId);
             const uncovered = messages.slice(maxOrd + 1, maxOrd + 13);
             const windowMsgs = uncovered.map((m: any, idx: number) => {
