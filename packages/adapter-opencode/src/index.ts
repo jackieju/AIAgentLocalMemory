@@ -1400,6 +1400,25 @@ JSON:`;
         }
 
         if (rendered.length > 0) {
+          const skippedCount = tailActualStart - tailStart;
+          if (skippedCount > 20) {
+            const skippedSummaries: string[] = [];
+            for (let i = tailStart; i < tailActualStart; i++) {
+              const m = messages[i];
+              if (m.info?.role !== "user") continue;
+              const text = (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ").trim();
+              if (text.length < 5) continue;
+              skippedSummaries.push(text.slice(0, 80));
+              if (skippedSummaries.length >= 50) break;
+            }
+            if (skippedSummaries.length > 0) {
+              const summaryMsg = {
+                info: { role: "user" },
+                parts: [{ type: "text", text: `<earlier-topics count="${skippedCount} messages not shown">\n${skippedSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</earlier-topics>` }]
+              };
+              rendered.unshift(summaryMsg);
+            }
+          }
           messages.splice(0, messages.length, ...rendered);
           try {
             writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
