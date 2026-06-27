@@ -77,6 +77,7 @@ const NODE_TYPES: readonly NodeType[] = [
   "episode",
   "meta",
   "fact",
+  "experience",
 ] as const;
 
 function projectIdFromDir(dir: string): string {
@@ -126,6 +127,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   let llmProvider: LLMProvider | undefined;
   let embeddingProvider: EmbeddingProvider | undefined;
+  let serverLlmProvider: LLMProvider | undefined;
 
   if (pluginConfig.llm) {
     const c = pluginConfig.llm;
@@ -133,6 +135,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       llmProvider = new OllamaLLM({ model: c.model });
     } else if (c.provider === "openai" || c.provider === "custom") {
       llmProvider = new OpenAICompatibleLLM({
+        baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
+        apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
+        model: c.model,
+      });
+    }
+  }
+
+  if (pluginConfig.serverLlm) {
+    const c = pluginConfig.serverLlm;
+    if (c.provider === "ollama") {
+      serverLlmProvider = new OllamaLLM({ model: c.model });
+    } else if (c.provider === "openai" || c.provider === "custom") {
+      serverLlmProvider = new OpenAICompatibleLLM({
         baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
         apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
         model: c.model,
@@ -532,6 +547,36 @@ JSON:`;
   }
 
   const z = tool.schema;
+
+  function buildTeachingPrompt(problem: string, context: string | undefined, learnFrom: string): string {
+    let prompt = `You are a senior expert helping a junior developer learn. The junior is stuck on a problem and needs your guidance.
+
+## Problem
+${problem}
+`;
+    if (context) {
+      prompt += `
+## What has been tried
+${context}
+`;
+    }
+
+    if (learnFrom === "reasoning") {
+      prompt += `
+## Instructions
+Explain your REASONING PROCESS step by step. Focus on HOW you think about this problem, not just the answer. The goal is to teach the junior to solve similar problems independently in the future.`;
+    } else if (learnFrom === "solution") {
+      prompt += `
+## Instructions
+Provide a clear, actionable SOLUTION. Be specific with code examples, commands, or configurations as needed.`;
+    } else {
+      prompt += `
+## Instructions
+First explain your reasoning process (how you approach this problem), then provide a concrete solution. The goal is both to solve the immediate problem AND teach the junior to handle similar situations independently.`;
+    }
+
+    return prompt;
+  }
 
   return {
     dispose: async () => {
@@ -974,6 +1019,58 @@ JSON:`;
           }
 
           return { title: "Error", output: `Unknown action: ${action}` };
+        },
+      }),
+
+      neural_ask_server: tool({
+        description:
+          "Consult a powerful server-side LLM for problems the local agent cannot solve. Sends the current problem context to a server LLM (e.g. Claude, GPT-4), gets back reasoning and solution, then stores the experience for future recall. Use when: (1) user says '问一下大模型' or 'ask the server model', (2) you've failed to solve a problem after multiple attempts, (3) you encounter something beyond your knowledge.",
+        args: {
+          problem: z.string().min(1).describe("Description of the problem or question to ask the server LLM."),
+          context: z.string().optional().describe("Additional context: what you've already tried, relevant code snippets, error messages."),
+          learnFrom: z.enum(["reasoning", "solution", "both"]).optional().describe("What to learn from the response: reasoning process, final solution, or both (default: both)."),
+        },
+        async execute(args) {
+          if (!serverLlmProvider) {
+            return {
+              title: "Server LLM not configured",
+              output: "No serverLlm configured in neural-context.json. Add a serverLlm section with provider, baseUrl, apiKey, and model.",
+            };
+          }
+
+          const learnFrom = args.learnFrom ?? "both";
+          const teachingPrompt = buildTeachingPrompt(args.problem, args.context, learnFrom);
+
+          try {
+            const response = await serverLlmProvider.complete(teachingPrompt, { maxTokens: 4000 });
+            if (!response) {
+              return { title: "No response", output: "Server LLM returned empty response." };
+            }
+
+            const experienceContent = `[Problem] ${args.problem}\n[Server Response] ${response.slice(0, 3000)}`;
+            await engine.remember(experienceContent, "experience" as any, {
+              importance: 0.9,
+              metadata: {
+                experienceData: {
+                  source: "server_llm",
+                  problem: args.problem.slice(0, 200),
+                  learnFrom,
+                  timestamp: Date.now(),
+                },
+              },
+            });
+
+            return {
+              title: "Server LLM consulted",
+              output: response,
+              metadata: { learned: true, learnFrom },
+            };
+          } catch (err: any) {
+            return {
+              title: "Server LLM error",
+              output: `Failed to consult server LLM: ${err?.message ?? String(err)}`,
+            };
+          }
         },
       }),
 
@@ -1437,6 +1534,20 @@ JSON:`;
             }
           }
           messages.splice(0, messages.length, ...rendered);
+
+          if (serverLlmProvider) {
+            const lastUserMsg = rendered.findLast((m: any) => m.info?.role === "user");
+            if (lastUserMsg) {
+              const userText = (lastUserMsg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ");
+              const triggers = ["问一下大模型", "问大模型", "ask the server", "ask server model", "consult server"];
+              if (triggers.some(t => userText.includes(t))) {
+                messages.push({
+                  info: { role: "user" },
+                  parts: [{ type: "text", text: "[System hint: The user wants to consult the server LLM. Call neural_ask_server with the current problem extracted from context.]" }],
+                });
+              }
+            }
+          }
           try {
             writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
               ts: Date.now(),
@@ -1685,6 +1796,17 @@ JSON:`;
             blocks.push(`  <memory id="${f.id.slice(0, 8)}" category="${fd?.scope ?? "global"}">${f.content}</memory>`);
           }
           blocks.push("</project-memory>");
+        }
+
+        const experiences = await storage.queryNodes({ type: "experience" as any });
+        if (experiences.length > 0) {
+          blocks.push("");
+          blocks.push("<learned-experiences>");
+          blocks.push("These are solutions learned from consulting a more powerful server LLM. Use them when facing similar problems:");
+          for (const exp of experiences.slice(-10)) {
+            blocks.push(`  <experience id="${exp.id.slice(0, 8)}" time="${new Date(exp.createdAt).toISOString().slice(0, 10)}">${exp.content.slice(0, 500)}</experience>`);
+          }
+          blocks.push("</learned-experiences>");
         }
 
         if (blocks.length > 0) {

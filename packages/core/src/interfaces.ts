@@ -6,7 +6,8 @@ export type NodeType =
   | "filler"       // Low-priority context/filler words
   | "episode"      // Single message in conversation history
   | "meta"         // Hub node: consolidated summary of related nodes
-  | "fact";        // Durable session/project fact (survives compression)
+  | "fact"         // Durable session/project fact (survives compression)
+  | "experience";  // Learned experience from server LLM consultation
 
 export interface MemoryNode {
   id: string;
