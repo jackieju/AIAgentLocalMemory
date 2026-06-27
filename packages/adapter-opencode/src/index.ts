@@ -473,15 +473,16 @@ JSON:`;
       mkdirSync(icloudDir, { recursive: true });
 
       const backupFile = join(icloudDir, "opencode.db.gz");
-      execSync(`gzip -c "${openCodeDbPath}" > "${backupFile}"`, { stdio: "ignore" });
+      const { exec: execAsync } = await import("node:child_process");
+      execAsync(`nice -n 19 gzip -1 -c "${openCodeDbPath}" > "${backupFile}"`, { stdio: "ignore" } as any, () => {
+        writeFileSync(lastBackupFile, String(Date.now()));
+      });
 
       const configDir = join(homedir(), '.config', 'opencode');
       for (const f of ['opencode.jsonc', 'opencode.json', 'neural-context.json']) {
         const src = join(configDir, f);
         if (existsSync(src)) copyFileSync(src, join(icloudDir, f));
       }
-
-      writeFileSync(lastBackupFile, String(Date.now()));
     } catch {}
   }, 30 * 1000);
 
