@@ -368,7 +368,8 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }, 5 * 60 * 1000);
 
   if (historian) {
-    dreamerTimer = setInterval(async () => {
+    // Dreamer: daily cron at 2:00 AM (matching magic-context's schedule)
+    const runDreamer = async () => {
       try {
         const recentEpisodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId, limit: 20 });
         if (recentEpisodes.length < 5) return;
@@ -433,7 +434,22 @@ JSON:`;
           });
         }
       } catch {}
-    }, 10 * 60 * 1000);
+    };
+
+    // Schedule dreamer at 2:00 AM daily (like magic-context)
+    const scheduleDreamerCron = () => {
+      const now = new Date();
+      const next2am = new Date(now);
+      next2am.setHours(2, 0, 0, 0);
+      if (next2am <= now) next2am.setDate(next2am.getDate() + 1);
+      const msUntilNext = next2am.getTime() - now.getTime();
+      dreamerTimer = setTimeout(async () => {
+        await runDreamer();
+        // Reschedule for next day
+        dreamerTimer = setInterval(runDreamer, 24 * 60 * 60 * 1000);
+      }, msUntilNext) as any;
+    };
+    scheduleDreamerCron();
   }
 
   if (existsSync(join(syncDir, ".git"))) {
