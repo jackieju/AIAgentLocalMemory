@@ -127,7 +127,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   let llmProvider: LLMProvider | undefined;
   let embeddingProvider: EmbeddingProvider | undefined;
-  let serverLlmProvider: LLMProvider | undefined;
 
   if (pluginConfig.llm) {
     const c = pluginConfig.llm;
@@ -135,19 +134,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       llmProvider = new OllamaLLM({ model: c.model });
     } else if (c.provider === "openai" || c.provider === "custom") {
       llmProvider = new OpenAICompatibleLLM({
-        baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
-        apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
-        model: c.model,
-      });
-    }
-  }
-
-  if (pluginConfig.serverLlm) {
-    const c = pluginConfig.serverLlm;
-    if (c.provider === "ollama") {
-      serverLlmProvider = new OllamaLLM({ model: c.model });
-    } else if (c.provider === "openai" || c.provider === "custom") {
-      serverLlmProvider = new OpenAICompatibleLLM({
         baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
         apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
         model: c.model,
@@ -1024,31 +1010,52 @@ First explain your reasoning process (how you approach this problem), then provi
 
       neural_ask_server: tool({
         description:
-          "Consult a powerful server-side LLM for problems the local agent cannot solve. Sends the current problem context to a server LLM (e.g. Claude, GPT-4), gets back reasoning and solution, then stores the experience for future recall. Use when: (1) user says '问一下大模型' or 'ask the server model', (2) you've failed to solve a problem after multiple attempts, (3) you encounter something beyond your knowledge.",
+          "Consult the server-side LLM (OpenCode's configured model) for problems the local agent cannot solve. Creates a sub-session, sends the problem, gets back reasoning and solution, then stores the experience for future recall. Use when: (1) user says '问一下大模型' or 'ask the server model', (2) you've failed to solve a problem after multiple attempts, (3) you encounter something beyond your knowledge.",
         args: {
           problem: z.string().min(1).describe("Description of the problem or question to ask the server LLM."),
           context: z.string().optional().describe("Additional context: what you've already tried, relevant code snippets, error messages."),
           learnFrom: z.enum(["reasoning", "solution", "both"]).optional().describe("What to learn from the response: reasoning process, final solution, or both (default: both)."),
         },
         async execute(args) {
-          if (!serverLlmProvider) {
-            return {
-              title: "Server LLM not configured",
-              output: "No serverLlm configured in neural-context.json. Add a serverLlm section with provider, baseUrl, apiKey, and model.",
-            };
-          }
-
           const learnFrom = args.learnFrom ?? "both";
           const teachingPrompt = buildTeachingPrompt(args.problem, args.context, learnFrom);
 
           try {
-            const response = await serverLlmProvider.complete(teachingPrompt, { maxTokens: 4000 });
+            const childSession = await client.session.create({
+              body: { system: teachingPrompt },
+            });
+            const childId = childSession.data?.id;
+            if (!childId) {
+              return { title: "Error", output: "Failed to create sub-session for server LLM consultation." };
+            }
+
+            await client.session.promptAsync({
+              path: { id: childId },
+              body: { parts: [{ type: "text", text: args.problem + (args.context ? `\n\nContext:\n${args.context}` : "") }] },
+            });
+
+            await new Promise(r => setTimeout(r, 30000));
+
+            const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+            let response = "";
+            if (childMsgs.data) {
+              for (const msg of childMsgs.data) {
+                if (msg.info?.role === "assistant") {
+                  const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
+                  response = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n");
+                  break;
+                }
+              }
+            }
+
+            try { await client.session.delete({ path: { id: childId } }); } catch {}
+
             if (!response) {
-              return { title: "No response", output: "Server LLM returned empty response." };
+              return { title: "No response", output: "Server LLM did not return a response within timeout." };
             }
 
             const experienceContent = `[Problem] ${args.problem}\n[Server Response] ${response.slice(0, 3000)}`;
-            await engine.remember(experienceContent, "experience" as any, {
+            await engine.remember(experienceContent, "experience", {
               importance: 0.9,
               metadata: {
                 experienceData: {
@@ -1535,17 +1542,15 @@ First explain your reasoning process (how you approach this problem), then provi
           }
           messages.splice(0, messages.length, ...rendered);
 
-          if (serverLlmProvider) {
-            const lastUserMsg = rendered.findLast((m: any) => m.info?.role === "user");
-            if (lastUserMsg) {
-              const userText = (lastUserMsg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ");
-              const triggers = ["问一下大模型", "问大模型", "ask the server", "ask server model", "consult server"];
-              if (triggers.some(t => userText.includes(t))) {
-                messages.push({
-                  info: { role: "user" },
-                  parts: [{ type: "text", text: "[System hint: The user wants to consult the server LLM. Call neural_ask_server with the current problem extracted from context.]" }],
-                });
-              }
+          const lastUserMsg = rendered.findLast((m: any) => m.info?.role === "user");
+          if (lastUserMsg) {
+            const userText = (lastUserMsg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ");
+            const triggers = ["问一下大模型", "问大模型", "ask the server", "ask server model", "consult server"];
+            if (triggers.some(t => userText.includes(t))) {
+              messages.push({
+                info: { role: "user" },
+                parts: [{ type: "text", text: "[System hint: The user wants to consult the server LLM. Call neural_ask_server with the current problem extracted from context.]" }],
+              });
             }
           }
           try {
