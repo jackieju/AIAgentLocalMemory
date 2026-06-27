@@ -49,6 +49,7 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 - `episode` — Full conversation reference
 - `meta` — Hub node (consolidated summary)
 - `fact` — Durable note/fact that persists across sessions
+- `experience` — Learned solution from server LLM consultation
 
 **Synapses (Edges):** Weighted connections with types:
 - `entity` — Shared named entity
@@ -146,6 +147,7 @@ Restart OpenCode.
 | `neural_reduce` | Drop tagged content (suppress from rendering) |
 | `neural_pin` | Pin content to always show at full fidelity |
 | `neural_expand` | Expand compressed/elided content back to full text |
+| `neural_ask_server` | Consult the server LLM for problems the local agent can't solve |
 | `neural_import_history` | Import past OpenCode sessions into the neural graph |
 | `neural_backup` | Backup the entire memory graph to a timestamped directory |
 | `neural_sync` | Synchronize memory across machines via Git (init/push/pull/status) |
@@ -254,6 +256,45 @@ In this mode, magic-context handles "context window management" while AIAgentLoc
 | Use alongside magic-context (default) | No config needed — auto-detected |
 | AIAgentLocalMemory fully takes over | `neural-context.json`: `{"coexistWithMagicContext": false}` + remove magic-context from project opencode.json |
 | Disable AIAgentLocalMemory for this project | Use a project-level `opencode.json` that doesn't load the plugin |
+
+### Hybrid Agent — Server LLM Consultation
+
+The plugin supports a **"learn from the master"** pattern: when the local agent encounters problems beyond its ability, it can consult a more powerful server-side LLM and store the experience for future use.
+
+#### How it works
+
+```
+Agent stuck → calls neural_ask_server(problem="...", context="...")
+    → Creates an OpenCode sub-session
+    → Sends a Teaching Prompt to the configured LLM
+    → Gets back reasoning + solution
+    → Stores as "experience" node in memory graph
+    → Next time a similar problem arises, the experience is auto-injected into context
+```
+
+#### Usage
+
+**Explicit (user triggers):**
+- Say "问一下大模型" or "ask the server model" — the plugin auto-detects and prompts the LLM to call `neural_ask_server`
+
+**Automatic (LLM triggers):**
+- The LLM can call `neural_ask_server` directly when it recognizes it's stuck after multiple failed attempts
+
+#### Parameters
+
+| Parameter | Required | Description |
+|---|---|---|
+| `problem` | Yes | Description of the problem or question |
+| `context` | No | What's been tried, error messages, relevant code |
+| `learnFrom` | No | `"reasoning"` (how to think), `"solution"` (what to do), or `"both"` (default) |
+
+#### Experience Injection
+
+Stored experiences are automatically injected into the system prompt as `<learned-experiences>` — the agent sees solutions to past similar problems without needing to re-consult. Over time, the agent accumulates domain knowledge and needs less server consultation.
+
+#### Configuration
+
+No additional configuration needed — `neural_ask_server` uses OpenCode's own configured LLM model via sub-sessions. Whatever model is set in your OpenCode config (Claude, GPT, etc.) will be used for consultations.
 
 ---
 
