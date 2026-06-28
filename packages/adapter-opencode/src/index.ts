@@ -503,6 +503,24 @@ JSON:`;
     } catch {}
   }, 30 * 1000);
 
+  setTimeout(async () => {
+    try {
+      const { execSync } = await import("node:child_process");
+      const stateFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".auto-train-state");
+      const lastTrained = existsSync(stateFile) ? parseInt(readFileSync(stateFile, "utf-8")) || 0 : 0;
+      const db = rawStorage.getDb();
+      const expCount = (db.prepare("SELECT COUNT(*) as c FROM nodes WHERE type='experience'").get() as any)?.c ?? 0;
+      const newSinceLast = expCount - lastTrained;
+      const MIN_NEW = 20;
+      if (newSinceLast >= MIN_NEW) {
+        const pipelineScript = join(homedir(), "Desktop", "ju", "projects", "AIAgentLocalMemory", "packages", "lora-pipeline", "auto-train.sh");
+        if (existsSync(pipelineScript)) {
+          execSync(`nice -n 19 bash "${pipelineScript}"`, { stdio: "ignore", timeout: 600000 });
+        }
+      }
+    } catch {}
+  }, 120 * 1000);
+
   const renderConfig: ContextRenderConfig = {
     contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
     budgetRatio: pluginConfig.budgetRatio ?? 0.6,
