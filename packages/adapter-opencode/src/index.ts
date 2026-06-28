@@ -1018,7 +1018,80 @@ First explain your reasoning process (how you approach this problem), then provi
         },
         async execute(args) {
           const learnFrom = args.learnFrom ?? "both";
-          const teachingPrompt = buildTeachingPrompt(args.problem, args.context, learnFrom);
+
+          // Phase 1: Local LLM pre-processing (if available)
+          let refinedProblem = args.problem;
+          let refinedContext = args.context;
+          let localPreAnalysis = "";
+
+          if (llmProvider) {
+            try {
+              // Step 1: Check existing experiences first — maybe we already know the answer
+              const existingExp = await engine.recall(args.problem, 3);
+              const relevantExp = existingExp.filter((n: any) => n.type === "experience" && n.content);
+              if (relevantExp.length > 0) {
+                const expSummary = relevantExp.map((n: any) => n.content.slice(0, 500)).join("\n---\n");
+                // Ask local LLM: is this already answered by existing experience?
+                const checkPrompt = `You are evaluating whether existing experience answers a new problem.
+
+Problem: ${args.problem}
+${args.context ? `Context: ${args.context}` : ""}
+
+Existing experiences:
+${expSummary}
+
+If the existing experience FULLY answers the problem, respond with:
+RESOLVED: [brief answer extracted from experience]
+
+If NOT fully resolved, respond with:
+ESCALATE: [refined problem statement focusing on what's still unknown]`;
+
+                const checkResult = await llmProvider.complete(checkPrompt, { maxTokens: 500 });
+                if (checkResult.startsWith("RESOLVED:")) {
+                  const answer = checkResult.replace("RESOLVED:", "").trim();
+                  return {
+                    title: "Resolved from experience",
+                    output: `Found answer from past experience:\n\n${answer}\n\n(Source: previously learned from server LLM)`,
+                    metadata: { learned: false, fromExperience: true },
+                  };
+                } else if (checkResult.startsWith("ESCALATE:")) {
+                  refinedProblem = checkResult.replace("ESCALATE:", "").trim();
+                }
+              }
+
+              // Step 2: Local LLM refines the problem + context for server LLM
+              const refinePrompt = `You are preparing a question to ask a senior expert. Make the question clear, specific, and well-structured.
+
+Original problem: ${args.problem}
+${args.context ? `Context provided: ${args.context}` : "No additional context."}
+
+Rewrite as a focused, well-structured question for the expert. Include:
+1. Core question (1-2 sentences)
+2. Key constraints or requirements
+3. What has been tried (if any)
+
+Output ONLY the refined question, nothing else.`;
+
+              const refined = await llmProvider.complete(refinePrompt, { maxTokens: 800 });
+              if (refined && refined.length > 20) {
+                refinedProblem = refined;
+              }
+
+              // Step 3: Local LLM pre-analysis — what angles should server LLM consider?
+              const analysisPrompt = `Briefly analyze this problem and suggest 2-3 angles the expert should consider:
+
+Problem: ${refinedProblem}
+
+List the angles in 1-2 sentences each. Be concise.`;
+
+              localPreAnalysis = await llmProvider.complete(analysisPrompt, { maxTokens: 300 });
+            } catch {
+              // Local LLM failure is non-fatal — proceed with original problem
+            }
+          }
+
+          // Phase 2: Server LLM consultation
+          const teachingPrompt = buildTeachingPrompt(refinedProblem, refinedContext, learnFrom);
 
           try {
             const childSession = await client.session.create({
@@ -1029,9 +1102,13 @@ First explain your reasoning process (how you approach this problem), then provi
               return { title: "Error", output: "Failed to create sub-session for server LLM consultation." };
             }
 
+            let userMessage = refinedProblem;
+            if (refinedContext) userMessage += `\n\nContext:\n${refinedContext}`;
+            if (localPreAnalysis) userMessage += `\n\nPre-analysis (from local model):\n${localPreAnalysis}`;
+
             await client.session.promptAsync({
               path: { id: childId },
-              body: { parts: [{ type: "text", text: args.problem + (args.context ? `\n\nContext:\n${args.context}` : "") }] },
+              body: { parts: [{ type: "text", text: userMessage }] },
             });
 
             await new Promise(r => setTimeout(r, 30000));
@@ -1054,14 +1131,17 @@ First explain your reasoning process (how you approach this problem), then provi
               return { title: "No response", output: "Server LLM did not return a response within timeout." };
             }
 
-            const experienceContent = `[Problem] ${args.problem}\n[Server Response] ${response.slice(0, 3000)}`;
+            // Phase 3: Store experience
+            const experienceContent = `[Problem] ${args.problem}\n[Refined] ${refinedProblem}\n[Server Response] ${response.slice(0, 3000)}`;
             await engine.remember(experienceContent, "experience", {
               importance: 0.9,
               metadata: {
                 experienceData: {
                   source: "server_llm",
                   problem: args.problem.slice(0, 200),
+                  refinedProblem: refinedProblem.slice(0, 200),
                   learnFrom,
+                  hadLocalPreAnalysis: !!localPreAnalysis,
                   timestamp: Date.now(),
                 },
               },
@@ -1070,7 +1150,7 @@ First explain your reasoning process (how you approach this problem), then provi
             return {
               title: "Server LLM consulted",
               output: response,
-              metadata: { learned: true, learnFrom },
+              metadata: { learned: true, learnFrom, localPreProcessed: !!llmProvider },
             };
           } catch (err: any) {
             return {
@@ -1078,6 +1158,54 @@ First explain your reasoning process (how you approach this problem), then provi
               output: `Failed to consult server LLM: ${err?.message ?? String(err)}`,
             };
           }
+        },
+      }),
+
+      neural_export_training: tool({
+        description: "Export accumulated experience data as MLX LoRA training format (JSONL). Run this before fine-tuning the local LLM.",
+        args: {},
+        async execute() {
+          const db = rawStorage.getDb();
+          const experiences = db.prepare(
+            `SELECT id, content, metadata, createdAt FROM nodes WHERE type = 'experience' ORDER BY createdAt ASC`
+          ).all() as Array<{ id: string; content: string; metadata: string | null; createdAt: number }>;
+
+          if (experiences.length === 0) {
+            return { title: "No data", output: "No experience nodes found. Use neural_ask_server to accumulate learning data first." };
+          }
+
+          const trainingData: Array<{ instruction: string; input: string; output: string }> = [];
+          let skipped = 0;
+
+          for (const exp of experiences) {
+            const problemMatch = exp.content.match(/\[Problem\]\s*(.*?)(?=\[Refined\]|\[Server Response\])/s);
+            const refinedMatch = exp.content.match(/\[Refined\]\s*(.*?)(?=\[Server Response\])/s);
+            const responseMatch = exp.content.match(/\[Server Response\]\s*(.*)/s);
+
+            if (!problemMatch || !responseMatch) { skipped++; continue; }
+
+            trainingData.push({
+              instruction: "You are a senior expert. Solve the following problem with clear reasoning and a concrete solution.",
+              input: (refinedMatch?.[1] || problemMatch[1]).trim(),
+              output: responseMatch[1].trim(),
+            });
+          }
+
+          const outputDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "lora-training");
+          const { mkdirSync: mkDir, writeFileSync: writeF } = await import("node:fs");
+          mkDir(outputDir, { recursive: true });
+
+          const validCount = trainingData.length >= 10 ? Math.max(2, Math.floor(trainingData.length * 0.1)) : 0;
+          const trainData = validCount > 0 ? trainingData.slice(0, -validCount) : trainingData;
+          const validData = validCount > 0 ? trainingData.slice(-validCount) : trainingData;
+
+          writeF(join(outputDir, "train.jsonl"), trainData.map(d => JSON.stringify(d)).join("\n") + "\n");
+          writeF(join(outputDir, "valid.jsonl"), validData.map(d => JSON.stringify(d)).join("\n") + "\n");
+
+          return {
+            title: "Training data exported",
+            output: `Exported ${trainingData.length} examples (${trainData.length} train, ${validData.length} valid) to ${outputDir}/\nSkipped: ${skipped}\n\nNext step: cd packages/lora-pipeline && ./train.sh`,
+          };
         },
       }),
 
