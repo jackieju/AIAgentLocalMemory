@@ -34,6 +34,7 @@ type Stats = {
   compartmentStatus: { ts: number; beforePct: number; afterPct: number; compartments: number } | null
   build: string
   training: { lastTime: string; lastResult: string; totalRuns: number; improved: number } | null
+  trainingInProgress: boolean
 }
 
 function getStats(): Stats {
@@ -102,7 +103,16 @@ function getStats(): Stats {
     }
   } catch {}
 
-  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, build: getServerBuild(), training }
+  let trainingInProgress = false
+  try {
+    const flagPath = join(dataDir, ".training-in-progress")
+    if (existsSync(flagPath)) {
+      const started = parseInt(readFileSync(flagPath, "utf-8")) || 0
+      trainingInProgress = Date.now() - started < 600000
+    }
+  } catch {}
+
+  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, build: getServerBuild(), training, trainingInProgress }
 }
 
 function formatRepo(url: string): string {
@@ -164,9 +174,11 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
               : "no data"}</text>
             <text fg="#475569">─────────────────</text>
             <text bold fg="#e879f9">◆ LoRA Training</text>
-            <text fg="#94a3b8">{stats().training
-              ? `Last: ${formatLastSync(stats().training!.lastTime)} ${stats().training!.lastResult === "improved" ? "✓" : "✗"}`
-              : "no training yet"}</text>
+            <text fg={stats().trainingInProgress ? "#fbbf24" : "#94a3b8"}>{stats().trainingInProgress
+              ? "⏳ Training in progress..."
+              : stats().training
+                ? `Last: ${formatLastSync(stats().training!.lastTime)} ${stats().training!.lastResult === "improved" ? "✓" : "✗"}`
+                : "no training yet"}</text>
             <text fg="#94a3b8">{stats().training
               ? `Runs: ${stats().training!.totalRuns}  Improved: ${stats().training!.improved}/${stats().training!.totalRuns}`
               : ""}</text>

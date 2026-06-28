@@ -515,7 +515,13 @@ JSON:`;
       if (newSinceLast >= MIN_NEW) {
         const pipelineScript = join(homedir(), "Desktop", "ju", "projects", "AIAgentLocalMemory", "packages", "lora-pipeline", "auto-train.sh");
         if (existsSync(pipelineScript)) {
-          execSync(`nice -n 19 bash "${pipelineScript}"`, { stdio: "ignore", timeout: 600000 });
+          const flagFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".training-in-progress");
+          writeFileSync(flagFile, String(Date.now()));
+          try {
+            execSync(`nice -n 19 bash "${pipelineScript}"`, { stdio: "ignore", timeout: 600000 });
+          } finally {
+            try { const { unlinkSync } = await import("node:fs"); unlinkSync(flagFile); } catch {}
+          }
         }
       }
     } catch {}
