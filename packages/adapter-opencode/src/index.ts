@@ -754,11 +754,11 @@ First explain your reasoning process (how you approach this problem), then provi
       }),
 
       neural_expand: tool({
-        description: "Expand compressed/elided content back to full text. Use tag numbers from §N§ identifiers, or expand a compartment by ordinal range (start, end).",
+        description: "Expand a compressed compartment from <session-history> back to full original text. Only use this when you see <compartment start=\"N\" end=\"M\"> in the session history and want to read the original conversation. NOT for expanding regular messages — those are already visible in full.",
         args: {
-          tags: z.string().optional().describe("Tag numbers to expand (e.g. '3-5', '1,2,9')."),
-          start: z.number().int().optional().describe("Start ordinal of compartment to expand."),
-          end: z.number().int().optional().describe("End ordinal of compartment to expand."),
+          tags: z.string().optional().describe("Tag numbers to restore if previously dropped via neural_reduce (e.g. '3-5', '1,2,9')."),
+          start: z.number().int().optional().describe("Start ordinal from compartment's start attribute."),
+          end: z.number().int().optional().describe("End ordinal from compartment's end attribute."),
         },
         async execute(args) {
           if (args.start !== undefined && args.end !== undefined) {
@@ -1931,8 +1931,8 @@ JSON:`;
 
         const blocks: string[] = [];
 
-        if (!magicContextPresent) {
-          const sysSessionId = currentOpenCodeSessionId || sessionId;
+        if (!magicContextPresent && currentOpenCodeSessionId) {
+          const sysSessionId = currentOpenCodeSessionId;
           const compartments = compartmentStore.getForSession(sysSessionId);
           if (compartments.length > 0) {
             blocks.push("<session-history>");
