@@ -7,6 +7,7 @@ MIN_EXPERIENCES="${MIN_EXPERIENCES:-20}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3-experience}"
 GRAPH_DB="$HOME/.local/share/ai-agent-local-memory/graph.db"
 STATE_FILE="$SCRIPT_DIR/.auto-train-state"
+HISTORY_FILE="$HOME/.local/share/ai-agent-local-memory/train-history.json"
 TRAIN_DATA="$SCRIPT_DIR/training-data/train.jsonl"
 
 EXPERIENCE_COUNT=$(sqlite3 "$GRAPH_DB" "SELECT COUNT(*) FROM nodes WHERE type='experience';" 2>/dev/null || echo "0")
@@ -51,32 +52,62 @@ echo ""
 echo "Base loss:      $BASE_LOSS"
 echo "Fine-tuned loss: $TUNED_LOSS"
 
-if [ "$(echo "$TUNED_LOSS > $BASE_LOSS" | bc -l 2>/dev/null || echo 1)" = "1" ]; then
+IMPROVED="false"
+if [ "$(echo "$TUNED_LOSS < $BASE_LOSS" | bc -l 2>/dev/null || echo 0)" = "1" ]; then
+  IMPROVED="true"
+fi
+
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+if [ "$IMPROVED" = "false" ]; then
   echo ""
   echo "[auto-train] DEGRADED — fine-tuned model is worse. Rolling back."
   "$SCRIPT_DIR/rollback.sh"
-  echo "$EXPERIENCE_COUNT" > "$STATE_FILE"
-  exit 1
 fi
 
-echo ""
-echo "=== Step 4: Deploy to ollama ==="
-MODELFILE="$SCRIPT_DIR/Modelfile"
-cat > "$MODELFILE" << EOF
+if [ "$IMPROVED" = "true" ]; then
+  echo ""
+  echo "=== Step 4: Deploy to ollama ==="
+  MODELFILE="$SCRIPT_DIR/Modelfile"
+  cat > "$MODELFILE" << EOF
 FROM qwen3:8b
 ADAPTER $SCRIPT_DIR/adapters/latest
 EOF
 
-ollama create "$OLLAMA_MODEL" -f "$MODELFILE" 2>/dev/null && {
-  echo "[auto-train] Deployed as ollama model: $OLLAMA_MODEL"
-} || {
-  echo "[auto-train] WARNING: ollama create failed. Adapter saved but not deployed."
-  echo "  Manual deploy: ollama create $OLLAMA_MODEL -f $MODELFILE"
-}
+  ollama create "$OLLAMA_MODEL" -f "$MODELFILE" 2>/dev/null && {
+    echo "[auto-train] Deployed as ollama model: $OLLAMA_MODEL"
+  } || {
+    echo "[auto-train] WARNING: ollama create failed. Adapter saved but not deployed."
+  }
+fi
 
 echo "$EXPERIENCE_COUNT" > "$STATE_FILE"
 
+mkdir -p "$(dirname "$HISTORY_FILE")"
+if [ ! -f "$HISTORY_FILE" ]; then
+  echo '{"runs":[],"totalRuns":0,"improved":0}' > "$HISTORY_FILE"
+fi
+
+python3 -c "
+import json, sys
+h = json.load(open('$HISTORY_FILE'))
+h['runs'].append({
+  'timestamp': '$TIMESTAMP',
+  'baseLoss': $BASE_LOSS,
+  'tunedLoss': $TUNED_LOSS,
+  'improved': $IMPROVED,
+  'examples': $TRAIN_COUNT
+})
+h['runs'] = h['runs'][-50:]
+h['totalRuns'] = h.get('totalRuns', 0) + 1
+h['improved'] = h.get('improved', 0) + (1 if $IMPROVED else 0)
+json.dump(h, open('$HISTORY_FILE', 'w'), indent=2)
+" 2>/dev/null || echo "[auto-train] WARNING: failed to update history file"
+
 echo ""
 echo "=== Pipeline complete ==="
-echo "Model '$OLLAMA_MODEL' ready. Update neural-context.json:"
-echo "  { \"llm\": { \"provider\": \"ollama\", \"model\": \"$OLLAMA_MODEL\" } }"
+if [ "$IMPROVED" = "true" ]; then
+  echo "Result: IMPROVED (loss $BASE_LOSS -> $TUNED_LOSS)"
+else
+  echo "Result: DEGRADED (loss $BASE_LOSS -> $TUNED_LOSS) — rolled back"
+fi

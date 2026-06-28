@@ -33,6 +33,7 @@ type Stats = {
   lastSync: string
   compartmentStatus: { ts: number; beforePct: number; afterPct: number; compartments: number } | null
   build: string
+  training: { lastTime: string; lastResult: string; totalRuns: number; improved: number } | null
 }
 
 function getStats(): Stats {
@@ -86,7 +87,22 @@ function getStats(): Stats {
     }
   } catch {}
 
-  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, build: getServerBuild() }
+  let training: Stats["training"] = null
+  try {
+    const histPath = join(dataDir, "train-history.json")
+    if (existsSync(histPath)) {
+      const h = JSON.parse(readFileSync(histPath, "utf-8"))
+      const lastRun = h.runs?.length > 0 ? h.runs[h.runs.length - 1] : null
+      training = {
+        lastTime: lastRun?.timestamp || "never",
+        lastResult: lastRun?.improved ? "improved" : "degraded",
+        totalRuns: h.totalRuns || 0,
+        improved: h.improved || 0,
+      }
+    }
+  } catch {}
+
+  return { nodeCount, edgeCount, types, workingMemory, logLines, syncRepo, lastSync, compartmentStatus, build: getServerBuild(), training }
 }
 
 function formatRepo(url: string): string {
@@ -146,6 +162,14 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
             <text fg="#94a3b8">{stats().compartmentStatus
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
+            <text fg="#475569">─────────────────</text>
+            <text bold fg="#e879f9">◆ LoRA Training</text>
+            <text fg="#94a3b8">{stats().training
+              ? `Last: ${formatLastSync(stats().training!.lastTime)} ${stats().training!.lastResult === "improved" ? "✓" : "✗"}`
+              : "no training yet"}</text>
+            <text fg="#94a3b8">{stats().training
+              ? `Runs: ${stats().training!.totalRuns}  Improved: ${stats().training!.improved}/${stats().training!.totalRuns}`
+              : ""}</text>
             <text fg="#475569">─────────────────</text>
             <text fg="#64748b">v{VERSION} b{stats().build}</text>
           </box>
