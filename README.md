@@ -257,44 +257,128 @@ In this mode, magic-context handles "context window management" while AIAgentLoc
 | AIAgentLocalMemory fully takes over | `neural-context.json`: `{"coexistWithMagicContext": false}` + remove magic-context from project opencode.json |
 | Disable AIAgentLocalMemory for this project | Use a project-level `opencode.json` that doesn't load the plugin |
 
-### Hybrid Agent — Server LLM Consultation
+### Growing Local Agent — Three Learning Modes
 
-The plugin supports a **"learn from the master"** pattern: when the local agent encounters problems beyond its ability, it can consult a more powerful server-side LLM and store the experience for future use.
-
-#### How it works
-
-```
-Agent stuck → calls neural_ask_server(problem="...", context="...")
-    → Creates an OpenCode sub-session
-    → Sends a Teaching Prompt to the configured LLM
-    → Gets back reasoning + solution
-    → Stores as "experience" node in memory graph
-    → Next time a similar problem arises, the experience is auto-injected into context
-```
-
-#### Usage
-
-**Explicit (user triggers):**
-- Say "问一下大模型" or "ask the server model" — the plugin auto-detects and prompts the LLM to call `neural_ask_server`
-
-**Automatic (LLM triggers):**
-- The LLM can call `neural_ask_server` directly when it recognizes it's stuck after multiple failed attempts
-
-#### Parameters
-
-| Parameter | Required | Description |
-|---|---|---|
-| `problem` | Yes | Description of the problem or question |
-| `context` | No | What's been tried, error messages, relevant code |
-| `learnFrom` | No | `"reasoning"` (how to think), `"solution"` (what to do), or `"both"` (default) |
-
-#### Experience Injection
-
-Stored experiences are automatically injected into the system prompt as `<learned-experiences>` — the agent sees solutions to past similar problems without needing to re-consult. Over time, the agent accumulates domain knowledge and needs less server consultation.
+The plugin implements a **growing local intelligence** system: a local LLM progressively learns from a powerful server LLM (Claude/GPT) through observation, guided learning, or on-demand consultation. Over time, the local agent becomes increasingly self-sufficient.
 
 #### Configuration
 
-No additional configuration needed — `neural_ask_server` uses OpenCode's own configured LLM model via sub-sessions. Whatever model is set in your OpenCode config (Claude, GPT, etc.) will be used for consultations.
+```json
+// ~/.config/opencode/neural-context.json
+{
+  "localLlm": {
+    "provider": "ollama",
+    "endpoint": "http://localhost:11434",   // or remote: "http://192.168.1.100:11434"
+    "model": "qwen3:8b",
+    "mode": "observer",                     // "observer" | "student" | "primary"
+    "confidence": {
+      "userThreshold": 0.5,                 // student mode: confidence below this triggers escalation
+      "autoEscalateAfter": 3                // student mode: auto-escalate after N user corrections
+    },
+    "training": {
+      "triggerCount": 100                   // LoRA training triggers after this many training pairs
+    }
+  }
+}
+```
+
+#### Modes
+
+| Mode | Main Model | Local LLM Role | Learning Method |
+|---|---|---|---|
+| **observer** | Server LLM (OpenCode config) | Silent observer | Stores every {question, reply} pair for distillation |
+| **student** | Local LLM (OpenCode provider = ollama) | Active with safety net | Auto-escalates via `neural_ask_server` when confidence is low |
+| **primary** | Local LLM (OpenCode provider = ollama) | Fully autonomous | Only escalates when user explicitly says "问大模型" |
+| *(not configured)* | Server LLM (OpenCode config) | N/A | Plugin works normally without local learning |
+
+#### Observer Mode
+
+The local LLM silently watches how the server LLM (Claude) handles every request:
+
+```
+User asks question → Claude answers → Plugin stores {question, answer} as training pair
+                                     → After 100 pairs: triggers LoRA fine-tuning automatically
+```
+
+- Training data stored in `~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl`
+- No impact on response quality — server LLM handles everything
+- Ideal starting point: accumulate data before switching to student/primary mode
+
+#### Student Mode
+
+The local LLM is the main responder (OpenCode provider = ollama), with automatic escalation:
+
+```
+User asks question → Local LLM assesses confidence
+  → High confidence + has relevant experience: answers independently
+  → Low confidence / unfamiliar topic: calls neural_ask_server → learns from response
+  → User corrects 3+ times: auto-suggests escalation for subsequent questions
+```
+
+- Confidence threshold configurable (`confidence.userThreshold`, default 0.5)
+- Dissatisfaction detection: tracks "不对", "错了", "wrong", "重做" signals
+- Every successful escalation stored as training pair → periodic LoRA fine-tuning
+
+#### Primary Mode
+
+The local LLM is fully autonomous — only escalates on explicit user request:
+
+```
+User asks question → Local LLM answers independently (always)
+User says "问大模型" → calls neural_ask_server → learns from response
+```
+
+- Maximum autonomy, minimum server LLM usage
+- Ideal after significant LoRA training has been completed
+
+#### LoRA Fine-Tuning Pipeline
+
+Training happens automatically when enough data accumulates:
+
+```bash
+# Manual training (packages/lora-pipeline/)
+./train.sh                    # MLX LoRA training (Qwen3 8B, rank 8, 200 iters)
+./benchmark.sh                # Compare base vs fine-tuned
+./rollback.sh                 # Revert if degraded
+
+# Or trigger from OpenCode:
+# Use neural_export_training tool to export data manually
+```
+
+**Auto-training**: Plugin monitors training pair count. When threshold is reached (100 for observer, 50 for student/primary), training is triggered in background with `nice -n 19` (low CPU priority).
+
+**Sidebar status**: TUI sidebar shows training status:
+```
+◆ LoRA Training
+Last: 3h ago ✓              ← last training time + result
+Runs: 5  Improved: 3/5     ← total runs + success count
+```
+
+#### Remote Local LLM
+
+The local LLM can run on another machine in your network:
+
+```json
+{
+  "localLlm": {
+    "provider": "ollama",
+    "endpoint": "http://192.168.1.100:11434",
+    "model": "qwen3:32b"
+  }
+}
+```
+
+On the remote machine: `OLLAMA_HOST=0.0.0.0 ollama serve`
+
+#### Progression Path
+
+```
+1. Start with observer mode (accumulate 100+ training pairs)
+2. Run LoRA fine-tuning on accumulated data
+3. Switch to student mode (local LLM with safety net)
+4. As local model improves, reduce escalation frequency
+5. Switch to primary mode (fully autonomous local agent)
+```
 
 ---
 
