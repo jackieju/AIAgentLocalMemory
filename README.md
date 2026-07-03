@@ -28,10 +28,6 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 │   │    when truly stuck                 │                                   │
 │   └─────────────────────────────────────┘                                   │
 │                                                                             │
-│   Day 1: Asks server for everything ──────────────────────────────────────▶ │
-│   Day 30: Handles 60% independently ─────────────────────────────────────▶  │
-│   Day 180: Handles 90%+ on its own ──────────────────────────────────────▶  │
-│                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,13 +50,13 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 │  │  • Training Data Collector (distillation pairs)            │   │
 │  └──────────────────────┬─────────────────────────────────────┘   │
 ├─────────────────────────┼─────────────────────────────────────────┤
-│  ┌────────────────────────────────────────────────────────────┐   │
-│  │         Local LLM Layer (ollama / remote)                   │   │
-│  │  • Observer: silently learns from server LLM               │   │
-│  │  • Student: answers with auto-escalation safety net        │   │
-│  │  • Primary: fully autonomous, escalates on demand          │   │
-│  │  • LoRA Fine-tuning Pipeline (auto-triggered)              │   │
-│  └──────────────────────┬─────────────────────────────────────┘   │
+│  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐   │
+│  │         Local LLM Layer (optional, ollama / remote)         │   │
+│     • Observer: silently learns from server LLM               │   │
+│  │  • Student: answers with auto-escalation safety net         │   │
+│     • Primary: fully autonomous, escalates on demand          │   │
+│  │  • LoRA Fine-tuning Pipeline (auto-triggered)               │   │
+│  └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┬─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┘   │
 ├─────────────────────────┼─────────────────────────────────────────┤
 │  ┌────────────────────────────────────────────────────────────┐   │
 │  │         Storage Layer                                       │   │
