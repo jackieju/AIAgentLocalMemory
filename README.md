@@ -1,33 +1,128 @@
 # AIAgentLocalMemory
 
-Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spreading activation, and a working memory queue instead of traditional database queries.
+**Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   ☁️  Server LLM (Claude, GPT, etc.)                                        │
+│   ┌─────────────────────────────────────┐                                   │
+│   │  Shared brain. Powerful but:        │                                   │
+│   │  • No personal memory               │                                   │
+│   │  • No individual growth             │                                   │
+│   │  • Treats everyone the same         │                                   │
+│   │  • Every request costs money        │                                   │
+│   └─────────────────────────────────────┘                                   │
+│                         ▲ consult when stuck                                │
+│                         │                                                   │
+│   🧠  Your Local Agent (Local LLM + This Plugin)                            │
+│   ┌─────────────────────────────────────┐                                   │
+│   │  Your own brain. Grows with you:    │                                   │
+│   │  • Remembers YOUR projects          │                                   │
+│   │  • Learns YOUR patterns             │                                   │
+│   │  • Gets faster over time            │                                   │
+│   │  • Runs free, locally               │                                   │
+│   │  • Asks the "shared brain" only     │                                   │
+│   │    when truly stuck                 │                                   │
+│   └─────────────────────────────────────┘                                   │
+│                                                                             │
+│   Day 1: Asks server for everything ──────────────────────────────────────▶ │
+│   Day 30: Handles 60% independently ─────────────────────────────────────▶  │
+│   Day 180: Handles 90%+ on its own ──────────────────────────────────────▶  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Adapter Layer (per-host)                        │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐      │
-│  │ OpenCode │  │ OpenClaw │  │  CLI/API │      │
-│  │ Adapter  │  │ Adapter  │  │ (future) │      │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘      │
-├───────┼──────────────┼──────────────┼────────────┤
-│  ┌─────────────────────────────────────────┐    │
-│  │         Core Engine                      │    │
-│  │  • Graph (nodes + synapses)             │    │
-│  │  • Spreading Activation                 │    │
-│  │  • Hebbian Learning / Decay             │    │
-│  │  • Working Memory Queue                 │    │
-│  │  • Context Renderer (f0-f4 fidelity)    │    │
-│  │  • Session Abstraction                  │    │
-│  └────────────────────┬────────────────────┘    │
-├───────────────────────┼──────────────────────────┤
-│  ┌─────────────────────────────────────────┐    │
-│  │         Storage Layer (pluggable)        │    │
-│  │  • SQLite + FTS5 (default)              │    │
-│  │  • Cross-runtime: bun:sqlite / node:sqlite │  │
-│  └─────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Adapter Layer (per-host)                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                        │
+│  │ OpenCode │  │ OpenClaw │  │  CLI/API │                        │
+│  │ Adapter  │  │ Adapter  │  │ (future) │                        │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘                        │
+├───────┼──────────────┼──────────────┼─────────────────────────────┤
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │         Core Engine                                         │   │
+│  │  • Neural Graph (nodes + synapses + Hebbian learning)      │   │
+│  │  • Spreading Activation + Working Memory                   │   │
+│  │  • Context Manager (historian + compartments)              │   │
+│  │  • Experience Store (learned solutions)                    │   │
+│  │  • Training Data Collector (distillation pairs)            │   │
+│  └──────────────────────┬─────────────────────────────────────┘   │
+├─────────────────────────┼─────────────────────────────────────────┤
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │         Local LLM Layer (ollama / remote)                   │   │
+│  │  • Observer: silently learns from server LLM               │   │
+│  │  • Student: answers with auto-escalation safety net        │   │
+│  │  • Primary: fully autonomous, escalates on demand          │   │
+│  │  • LoRA Fine-tuning Pipeline (auto-triggered)              │   │
+│  └──────────────────────┬─────────────────────────────────────┘   │
+├─────────────────────────┼─────────────────────────────────────────┤
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │         Storage Layer                                       │   │
+│  │  • SQLite + FTS5 (Intl.Segmenter for CJK)                 │   │
+│  │  • Operation Log (append-only, git-syncable)               │   │
+│  │  • Cross-device sync via Git                               │   │
+│  └────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## Enterprise Use Case: Shared Growing Intelligence
+
+For large teams working on complex projects, the plugin creates a **collective intelligence** that grows across all team members:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│   🏢  Large Project (hundreds of developers, years of history)               │
+│                                                                             │
+│   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐            │
+│   │Developer│ │Developer│ │Architect│ │ Support │ │   QA    │            │
+│   │  Alice  │ │   Bob   │ │  Carol  │ │  David  │ │   Eve   │            │
+│   └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘            │
+│        │           │           │           │           │                   │
+│        └───────────┴───────────┴───────────┴───────────┘                   │
+│                                │                                            │
+│                    ┌───────────▼───────────┐                                │
+│                    │   Shared Memory Graph  │                                │
+│                    │   (Git-synced SQLite)  │                                │
+│                    │                        │                                │
+│                    │  • Alice debugged the  │                                │
+│                    │    auth module → stored │                                │
+│                    │  • Bob optimized the   │                                │
+│                    │    query → stored       │                                │
+│                    │  • Carol's architecture│                                │
+│                    │    decisions → stored   │                                │
+│                    │  • David's customer    │                                │
+│                    │    patterns → stored    │                                │
+│                    └───────────┬───────────┘                                │
+│                                │                                            │
+│                    ┌───────────▼───────────┐                                │
+│                    │  Shared Local LLM      │                                │
+│                    │  (team ollama server)  │                                │
+│                    │                        │                                │
+│                    │  Learns from EVERYONE: │                                │
+│                    │  • Debugging patterns  │                                │
+│                    │  • Code conventions    │                                │
+│                    │  • Domain knowledge    │                                │
+│                    │  • Customer issues     │                                │
+│                    └───────────────────────┘                                │
+│                                                                             │
+│   Month 1:  Everyone asks server LLM constantly (high cost)                 │
+│   Month 3:  Local LLM handles routine questions (cost ↓ 40%)               │
+│   Month 6:  Local LLM knows the project deeply (cost ↓ 70%)                │
+│   Month 12: New hires get instant access to all accumulated knowledge       │
+│                                                                             │
+│   Key benefits:                                                             │
+│   • Eve asks "why does payment fail for JP users?" → local LLM recalls     │
+│     David's support experience + Alice's debugging notes + Bob's fix        │
+│   • New developer joins → immediately has access to team's entire           │
+│     problem-solving history without reading thousands of documents           │
+│   • No knowledge lost when someone leaves — their experience lives on       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Packages
