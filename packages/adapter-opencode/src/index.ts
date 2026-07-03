@@ -27,6 +27,20 @@ interface PluginConfig {
     apiKey?: string;
     model?: string;
   };
+  localLlm?: {
+    provider: "ollama" | "openai" | "custom";
+    endpoint?: string;
+    model?: string;
+    apiKey?: string;
+    mode: "observer" | "student" | "primary";
+    confidence?: {
+      userThreshold?: number;   // user-configured confidence threshold (0-1, default 0.5)
+      autoEscalateAfter?: number; // auto-escalate after N consecutive user dissatisfactions (default 3)
+    };
+    training?: {
+      triggerCount?: number;    // LoRA training trigger threshold (default: 100 for observer, 50 for student/primary)
+    };
+  };
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -153,6 +167,28 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       });
     }
   }
+
+  let localLlmProvider: LLMProvider | undefined;
+  const localLlmMode = pluginConfig.localLlm?.mode ?? null;
+  if (pluginConfig.localLlm) {
+    const lc = pluginConfig.localLlm;
+    const endpoint = lc.endpoint ?? "http://localhost:11434";
+    if (lc.provider === "ollama") {
+      localLlmProvider = new OllamaLLM({ model: lc.model, baseUrl: endpoint });
+    } else if (lc.provider === "openai" || lc.provider === "custom") {
+      localLlmProvider = new OpenAICompatibleLLM({
+        baseUrl: endpoint,
+        apiKey: lc.apiKey ?? process.env.OPENAI_API_KEY,
+        model: lc.model,
+      });
+    }
+  }
+
+  const localTrainingDir = join(dataBase, "ai-agent-local-memory", "training-pairs");
+  let dissatisfactionCount = 0;
+  const confidenceThreshold = pluginConfig.localLlm?.confidence?.userThreshold ?? 0.5;
+  const autoEscalateAfter = pluginConfig.localLlm?.confidence?.autoEscalateAfter ?? 3;
+  const trainingTriggerCount = pluginConfig.localLlm?.training?.triggerCount ?? (localLlmMode === "observer" ? 100 : 50);
 
   try {
     await engine.init({ storage, projectId: "global", episodesDir, llm: llmProvider, embedding: embeddingProvider });
@@ -1171,6 +1207,19 @@ List the angles in 1-2 sentences each. Be concise.`;
               },
             });
 
+            if (localLlmMode === "student" || localLlmMode === "primary") {
+              try {
+                const { mkdirSync: mkDir, appendFileSync } = await import("node:fs");
+                mkDir(localTrainingDir, { recursive: true });
+                const trainingPair = {
+                  instruction: "You are a helpful AI assistant. Answer the user's question thoroughly with clear reasoning.",
+                  input: refinedProblem.slice(0, 4000),
+                  output: response.slice(0, 8000),
+                };
+                appendFileSync(join(localTrainingDir, "pairs.jsonl"), JSON.stringify(trainingPair) + "\n");
+              } catch {}
+            }
+
             return {
               title: "Server LLM consulted",
               output: response,
@@ -1704,6 +1753,21 @@ List the angles in 1-2 sentences each. Be concise.`;
                 parts: [{ type: "text", text: "[System hint: The user wants to consult the server LLM. Call neural_ask_server with the current problem extracted from context.]" }],
               });
             }
+
+            if (localLlmMode === "student") {
+              const dissatisfactionSignals = ["不对", "错了", "wrong", "no that's not", "重做", "再试", "try again", "不是这样", "搞错了"];
+              if (dissatisfactionSignals.some(s => userText.toLowerCase().includes(s))) {
+                dissatisfactionCount++;
+                if (dissatisfactionCount >= autoEscalateAfter) {
+                  messages.push({
+                    info: { role: "user" },
+                    parts: [{ type: "text", text: `[System hint: The user has expressed dissatisfaction ${dissatisfactionCount} times. Your confidence should be LOW. Consider calling neural_ask_server for the current problem.]` }],
+                  });
+                }
+              } else if (userText.length > 10) {
+                dissatisfactionCount = Math.max(0, dissatisfactionCount - 1);
+              }
+            }
           }
           try {
             writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
@@ -1974,6 +2038,27 @@ JSON:`;
           }
           output.system.unshift(blockText);
         }
+
+        if (localLlmMode === "student") {
+          output.system.push(`<local-agent-mode>
+You are a LOCAL AI agent in STUDENT mode. You have access to a powerful server LLM via the neural_ask_server tool.
+
+CONFIDENCE ASSESSMENT:
+Before answering any non-trivial question, internally assess your confidence (0.0-1.0).
+- If confidence < ${confidenceThreshold}: Call neural_ask_server immediately with the problem.
+- If you're unsure about tool usage, complex reasoning, or unfamiliar topics: Call neural_ask_server.
+- If the user has corrected you ${autoEscalateAfter}+ times recently: Call neural_ask_server for subsequent questions.
+
+When calling neural_ask_server, learn from the response and incorporate the reasoning into your answer.
+Always try to answer yourself first for simple/familiar problems where you have relevant <learned-experiences>.
+</local-agent-mode>`);
+        } else if (localLlmMode === "primary") {
+          output.system.push(`<local-agent-mode>
+You are a LOCAL AI agent in PRIMARY mode. You are fully autonomous.
+Only call neural_ask_server when the user explicitly says "问大模型", "问一下大模型", "ask the server model", or similar.
+For all other requests, answer independently using your own knowledge and any <learned-experiences> above.
+</local-agent-mode>`);
+        }
       } catch {}
     },
 
@@ -2057,6 +2142,59 @@ JSON:`;
 
         if (newLineCount > existingLines) {
           writeFileSync(transcriptPath, fullContent);
+        }
+
+        if (localLlmMode === "observer" && localLlmProvider) {
+          mkdirSync(localTrainingDir, { recursive: true });
+          const msgs = msgsResult.data;
+          const recentPairs: Array<{ instruction: string; input: string; output: string }> = [];
+
+          for (let i = msgs.length - 1; i >= 1; i--) {
+            if (msgs[i].info.role === "assistant" && msgs[i - 1].info.role === "user") {
+              const userParts = (msgs[i - 1].parts ?? []).filter((p: any) => p.type === "text");
+              const userText = userParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+              const assistParts = (msgs[i].parts ?? []).filter((p: any) => p.type === "text");
+              const assistText = assistParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+
+              if (userText.length < 5 || assistText.length < 20) break;
+              if (userText.length > 8000 || assistText.length > 16000) break;
+
+              recentPairs.push({
+                instruction: "You are a helpful AI assistant. Answer the user's question thoroughly.",
+                input: userText.slice(0, 4000),
+                output: assistText.slice(0, 8000),
+              });
+              break;
+            }
+          }
+
+          if (recentPairs.length > 0) {
+            const pairsFile = join(localTrainingDir, "pairs.jsonl");
+            const { appendFileSync } = await import("node:fs");
+            for (const pair of recentPairs) {
+              appendFileSync(pairsFile, JSON.stringify(pair) + "\n");
+            }
+
+            const lineCount = existsSync(pairsFile) ? readFileSync(pairsFile, "utf-8").split("\n").filter(l => l.trim()).length : 0;
+            if (lineCount >= trainingTriggerCount) {
+              const stateFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".auto-train-state");
+              const lastTrained = existsSync(stateFile) ? parseInt(readFileSync(stateFile, "utf-8")) || 0 : 0;
+              if (lineCount - lastTrained >= trainingTriggerCount) {
+                const pipelineScript = join(homedir(), "Desktop", "ju", "projects", "AIAgentLocalMemory", "packages", "lora-pipeline", "auto-train.sh");
+                if (existsSync(pipelineScript)) {
+                  const flagFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".training-in-progress");
+                  writeFileSync(flagFile, String(Date.now()));
+                  try {
+                    const { exec: execAsync } = await import("node:child_process");
+                    execAsync(`nice -n 19 bash "${pipelineScript}"`, { env: { ...process.env, TRAINING_DATA: pairsFile } }, () => {
+                      try { const { unlinkSync } = require("node:fs"); unlinkSync(flagFile); } catch {}
+                      writeFileSync(stateFile, String(lineCount));
+                    });
+                  } catch {}
+                }
+              }
+            }
+          }
         }
       } catch {}
     },
