@@ -1517,13 +1517,8 @@ List the angles in 1-2 sentences each. Be concise.`;
 
         const tailBudgetTokens = Math.round(contextLimit * TARGET_USAGE_PCT);
         if (messages.length <= tailStart) {
-          let fallbackStart = messages.length - 1;
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const role = messages[i].info?.role;
-            const hasTool = (messages[i].parts ?? []).some((p: any) => p.type === "tool_call" || p.type === "tool_result");
-            if (role === "user" && !hasTool) { fallbackStart = i; break; }
-          }
-          tail = messages.slice(fallbackStart);
+          // All messages are beyond compartment coverage — keep everything
+          tail = messages.slice(0);
         } else {
           let tailTokens = 0;
           let startIdx = messages.length;
