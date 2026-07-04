@@ -1700,7 +1700,11 @@ List the angles in 1-2 sentences each. Be concise.`;
             }
           }
 
-          for (const part of (msg.parts ?? [])) {
+          const KNOWN_PART_TYPES = new Set(["text", "tool_call", "tool_result", "tool", "reasoning", "thinking", "image", "file"]);
+          msg.parts = (msg.parts ?? []).filter((p: any) => KNOWN_PART_TYPES.has(p.type));
+          if (msg.parts.length === 0) continue;
+
+          for (const part of msg.parts) {
             if (part.type === "text" && part.text !== undefined && part.text !== "" && !part.text.startsWith("§")) {
               part.text = `§${tagCounter}§ ${part.text}`;
               break;
@@ -1969,7 +1973,9 @@ JSON:`;
           renderedCount: rendered.length,
           msgSizes: messages.slice(0, 5).map((m: any) => JSON.stringify(m.parts ?? []).length),
         }));
-      } catch {}
+      } catch (transformErr: any) {
+        try { writeFileSync("/tmp/neural-transform-error.log", `${Date.now()} ${transformErr?.message ?? transformErr}\n${transformErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+      }
       if (output.messages) {
         const hasContent = output.messages.some((m: any) =>
           (m.parts ?? []).some((p: any) => p.type === "text" && p.text && p.text.trim().length > 0)
