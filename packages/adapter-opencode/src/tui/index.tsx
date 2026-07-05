@@ -149,41 +149,41 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
 
         return (
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
-            <text bold fg="#60a5fa">◆ Neural Memory</text>
-            <text fg="#475569">─────────────────</text>
-            <text fg="#34d399">Nodes: {stats().nodeCount}</text>
-            <text fg="#94a3b8">
+            <text bold fg="#2888ff">◆ Neural Memory</text>
+            <text fg="#2c3b51">─────────────────</text>
+            <text fg="#1bb97f">Nodes: {stats().nodeCount}</text>
+            <text fg="#6a87af">
               {Object.entries(stats().types)
                 .map(([t, c]) => `  ${t}: ${c}`)
                 .join("\n") || "  (empty)"}
             </text>
-            <text fg="#fbbf24">Edges: {stats().edgeCount}</text>
-            <text fg="#a78bfa">WM: {stats().workingMemory}</text>
-            <text fg="#475569">─────────────────</text>
-            <text bold fg="#c084fc">◆ Sync</text>
-            <text fg="#94a3b8">Ops: {stats().logLines}</text>
-            <text fg="#94a3b8">Last: {formatLastSync(stats().lastSync)}</text>
-            <text fg="#22d3ee">{formatRepo(stats().syncRepo)}</text>
-            <text fg="#475569">─────────────────</text>
-            <text bold fg="#f472b6">◆ Session</text>
-            <text fg="#94a3b8">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
-            <text fg="#475569">─────────────────</text>
-            <text bold fg="#fb923c">◆ Compartments</text>
-            <text fg="#94a3b8">{stats().compartmentStatus
+            <text fg="#ecaa00">Edges: {stats().edgeCount}</text>
+            <text fg="#7e53ff">WM: {stats().workingMemory}</text>
+            <text fg="#2c3b51">─────────────────</text>
+            <text bold fg="#a64eff">◆ Sync</text>
+            <text fg="#6a87af">Ops: {stats().logLines}</text>
+            <text fg="#6a87af">Last: {formatLastSync(stats().lastSync)}</text>
+            <text fg="#05bcd8">{formatRepo(stats().syncRepo)}</text>
+            <text fg="#2c3b51">─────────────────</text>
+            <text bold fg="#fa399e">◆ Session</text>
+            <text fg="#6a87af">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
+            <text fg="#2c3b51">─────────────────</text>
+            <text bold fg="#ff7605">◆ Compartments</text>
+            <text fg="#6a87af">{stats().compartmentStatus
               ? `${stats().compartmentStatus!.afterPct}%/${stats().compartmentStatus!.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus!.ts).toISOString())}  (${stats().compartmentStatus!.compartments})`
               : "no data"}</text>
-            <text fg="#475569">─────────────────</text>
-            <text bold fg="#e879f9">◆ LoRA Training</text>
-            <text fg={stats().trainingInProgress ? "#fbbf24" : "#94a3b8"}>{stats().trainingInProgress
+            <text fg="#2c3b51">─────────────────</text>
+            <text bold fg="#e640ff">◆ LoRA Training</text>
+            <text fg={stats().trainingInProgress ? "#ecaa00" : "#6a87af"}>{stats().trainingInProgress
               ? "⏳ Training in progress..."
               : stats().training
                 ? `Last: ${formatLastSync(stats().training!.lastTime)} ${stats().training!.lastResult === "improved" ? "✓" : "✗"}`
                 : "no training yet"}</text>
-            <text fg="#94a3b8">{stats().training
+            <text fg="#6a87af">{stats().training
               ? `Runs: ${stats().training!.totalRuns}  Improved: ${stats().training!.improved}/${stats().training!.totalRuns}`
               : ""}</text>
-            <text fg="#475569">─────────────────</text>
-            <text fg="#64748b">v{VERSION} b{stats().build}</text>
+            <text fg="#2c3b51">─────────────────</text>
+            <text fg="#455a77">v{VERSION} b{stats().build}</text>
           </box>
         )
       },
