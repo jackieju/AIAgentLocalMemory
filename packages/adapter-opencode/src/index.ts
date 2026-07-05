@@ -492,17 +492,14 @@ JSON:`;
   if (existsSync(join(syncDir, ".git"))) {
     syncTimer = setInterval(async () => {
       try {
-        const { execSync } = await import("node:child_process");
-        const hasChanges = (() => {
-          try {
-            const out = execSync("git status --porcelain", { cwd: syncDir, encoding: "utf-8" });
-            return out.trim().length > 0;
-          } catch { return false; }
-        })();
-        if (hasChanges) {
-          execSync('git add -A && git commit -m "sync: auto" && git push', { cwd: syncDir, stdio: "ignore" });
+        const { exec } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const execP = promisify(exec);
+        const { stdout } = await execP("git status --porcelain", { cwd: syncDir });
+        if (stdout.trim().length > 0) {
+          await execP('git add -A && git commit -m "sync: auto" && git push', { cwd: syncDir });
         }
-        execSync("git pull --rebase", { cwd: syncDir, stdio: "ignore" });
+        await execP("git pull --rebase", { cwd: syncDir });
       } catch {}
     }, 60 * 60 * 1000);
   }
@@ -541,7 +538,7 @@ JSON:`;
 
   setTimeout(async () => {
     try {
-      const { execSync } = await import("node:child_process");
+      const { exec } = await import("node:child_process");
       const stateFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".auto-train-state");
       const lastTrained = existsSync(stateFile) ? parseInt(readFileSync(stateFile, "utf-8")) || 0 : 0;
       const db = rawStorage.getDb();
@@ -553,11 +550,9 @@ JSON:`;
         if (existsSync(pipelineScript)) {
           const flagFile = join(homedir(), ".local", "share", "ai-agent-local-memory", ".training-in-progress");
           writeFileSync(flagFile, String(Date.now()));
-          try {
-            execSync(`nice -n 19 bash "${pipelineScript}"`, { stdio: "ignore", timeout: 600000 });
-          } finally {
-            try { const { unlinkSync } = await import("node:fs"); unlinkSync(flagFile); } catch {}
-          }
+          exec(`nice -n 19 bash "${pipelineScript}"`, { timeout: 600000 } as any, () => {
+            try { const { unlinkSync } = require("node:fs"); unlinkSync(flagFile); } catch {}
+          });
         }
       }
     } catch {}
