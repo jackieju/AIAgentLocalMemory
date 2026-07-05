@@ -207,14 +207,24 @@ LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01
 
 #### Option A: npm (recommended)
 
-Add to `opencode.json` or `opencode.jsonc`:
+The plugin is published on npm as [`ai-agent-local-memory`](https://www.npmjs.com/package/ai-agent-local-memory). OpenCode auto-installs npm plugins on startup — no manual `npm install` needed.
+
+Add to your OpenCode config (`~/.config/opencode/opencode.jsonc` or project-level `opencode.json`):
+
 ```json
 {
   "plugin": ["ai-agent-local-memory"]
 }
 ```
 
-Restart OpenCode.
+Restart OpenCode. On first launch, it will fetch the plugin from npm automatically.
+
+To use a specific version (optional):
+```json
+{
+  "plugin": ["ai-agent-local-memory@0.2.0"]
+}
+```
 
 #### Option B: From source
 
