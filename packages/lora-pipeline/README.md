@@ -6,7 +6,7 @@ Trains a local LLM (Qwen3 8B) on accumulated experience data from `neural_ask_se
 
 ```bash
 pip install mlx-lm
-ollama pull qwen3:8b
+ollama pull qwen3:14b
 ```
 
 ## Workflow
@@ -28,7 +28,7 @@ chmod +x train.sh
 ```
 
 Environment overrides:
-- `MODEL=Qwen/Qwen3-8B` — base model (HuggingFace ID)
+- `MODEL=Qwen/Qwen3-14B` — base model (HuggingFace ID)
 - `ITERS=200` — training iterations
 - `BATCH_SIZE=4`
 - `LORA_RANK=8`
@@ -55,7 +55,7 @@ Reverts `adapters/latest` symlink to previous version (or removes it entirely to
 After training, create an ollama Modelfile:
 
 ```
-FROM qwen3:8b
+FROM qwen3:14b
 ADAPTER ./adapters/latest
 ```
 

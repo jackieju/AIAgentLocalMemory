@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODEL="${MODEL:-Qwen/Qwen3-8B}"
+MODEL="${MODEL:-Qwen/Qwen3-14B}"
 ADAPTER_DIR="${SCRIPT_DIR}/adapters/$(date +%Y%m%d-%H%M%S)"
 TRAIN_DATA="${SCRIPT_DIR}/training-data/train.jsonl"
 VALID_DATA="${SCRIPT_DIR}/training-data/valid.jsonl"

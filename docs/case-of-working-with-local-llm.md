@@ -28,7 +28,7 @@ ollama serve
 ```json
 {
   "injectSystemPrompt": true,
-  "coexistWithMagicContext": false,
+  "coexistWithOtherContextManager": false,
   "syncRepo": "git@github.com:jackieju/myaimemorystore.git",
   "llm": {
     "provider": "ollama",

@@ -255,7 +255,7 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
   "injectSystemPrompt": true,
   "contextWindowTokens": 128000,
   "budgetRatio": 0.6,
-  "coexistWithMagicContext": false,
+  "coexistWithOtherContextManager": false,
   "syncRepo": "git@github.com:yourname/memory-sync.git",
   "llm": {
     "provider": "openai",
@@ -273,7 +273,7 @@ Create `neural-context.json` in your project root or `.opencode/` directory:
 | `injectSystemPrompt` | `true` | Inject relevant memories into the system prompt each turn |
 | `contextWindowTokens` | `128000` | Context window size in tokens for budget calculation |
 | `budgetRatio` | `0.6` | Fraction of context window allocated to history |
-| `coexistWithMagicContext` | auto-detected | Force coexistence mode on/off |
+| `coexistWithOtherContextManager` | auto-detected | Force coexistence mode on/off |
 | `syncRepo` | — | Git remote URL for multi-machine sync (auto-initializes on startup) |
 | `llm.provider` | — | LLM provider: `"openai"`, `"ollama"`, or `"custom"` |
 | `llm.baseUrl` | `https://api.openai.com/v1` | API endpoint (for custom providers) |
@@ -347,7 +347,7 @@ In this mode, magic-context handles "context window management" while AIAgentLoc
 | Scenario | How |
 |---|---|
 | Use alongside magic-context (default) | No config needed — auto-detected |
-| AIAgentLocalMemory fully takes over | `neural-context.json`: `{"coexistWithMagicContext": false}` + remove magic-context from project opencode.json |
+| AIAgentLocalMemory fully takes over | `neural-context.json`: `{"coexistWithOtherContextManager": false}` + remove magic-context from project opencode.json |
 | Disable AIAgentLocalMemory for this project | Use a project-level `opencode.json` that doesn't load the plugin |
 
 ### Growing Local Agent — Three Learning Modes

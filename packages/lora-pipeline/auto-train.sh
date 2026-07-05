@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODEL="${MODEL:-Qwen/Qwen3-8B}"
+MODEL="${MODEL:-Qwen/Qwen3-14B}"
 MIN_EXPERIENCES="${MIN_EXPERIENCES:-20}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-qwen3-experience}"
 GRAPH_DB="$HOME/.local/share/ai-agent-local-memory/graph.db"
@@ -70,7 +70,7 @@ if [ "$IMPROVED" = "true" ]; then
   echo "=== Step 4: Deploy to ollama ==="
   MODELFILE="$SCRIPT_DIR/Modelfile"
   cat > "$MODELFILE" << EOF
-FROM qwen3:8b
+FROM qwen3:14b
 ADAPTER $SCRIPT_DIR/adapters/latest
 EOF
 

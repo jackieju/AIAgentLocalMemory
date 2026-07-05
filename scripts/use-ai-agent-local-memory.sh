@@ -51,7 +51,7 @@ if (modeArg === "none") {
   fs.writeFileSync(neuralPath, JSON.stringify(c, null, 2) + "\n");
 } else {
   const mode = modeArg === "ob" ? "observer" : modeArg === "st" ? "student" : "primary";
-  const base = c.localLlm || { provider:"ollama", endpoint:"http://localhost:11434", model:"qwen3:8b" };
+  const base = c.localLlm || { provider:"ollama", endpoint:"http://localhost:11434", model:"qwen3:14b" };
   base.mode = mode;
   if (mode === "student") base.confidence = base.confidence || { userThreshold: 0.5, autoEscalateAfter: 3 };
   base.training = base.training || { triggerCount: mode === "observer" ? 100 : 50 };

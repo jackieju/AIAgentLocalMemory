@@ -13,7 +13,7 @@ interface PluginConfig {
   contextWindowTokens?: number;
   budgetRatio?: number;
   protectedTags?: number;
-  coexistWithMagicContext?: boolean;
+  coexistWithOtherContextManager?: boolean;
   syncRepo?: string;
   llm?: {
     provider: "openai" | "ollama" | "custom";
@@ -351,7 +351,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   if (existsSync(join(syncDir, ".git"))) {
   }
 
-  const magicContextPresent = pluginConfig.coexistWithMagicContext ?? detectMagicContext(directory);
+  const magicContextPresent = pluginConfig.coexistWithOtherContextManager ?? detectMagicContext(directory);
   if (magicContextPresent) {
     console.log("[ai-agent-local-memory] magic-context detected — running in coexistence mode (messages.transform disabled)");
   }
