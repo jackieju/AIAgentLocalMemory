@@ -2,7 +2,7 @@
 
 Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spreading activation, and a working memory queue instead of traditional database queries.
 
-**Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time.
+**Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time. Dont' waste any token any chat any dollar in your daily talk with LLM, which can make your local LLM smarter everyday.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -315,7 +315,7 @@ Without providers configured, the system still works using LightweightLinker onl
 { "llm": { "provider": "custom", "baseUrl": "http://localhost:8080/v1", "model": "my-model" } }
 ```
 
-### Standalone Mode (replaces magic-context)
+### Standalone Mode (e.g. replaces magic-context)
 
 In standalone mode, this plugin fully manages the context window:
 - Conversation history compression (activation-based fidelity rendering)
@@ -331,7 +331,7 @@ Replace magic-context in `opencode.json`:
 }
 ```
 
-### Coexistence Mode (alongside magic-context)
+### Coexistence Mode (e.g. alongside magic-context)
 
 When magic-context is detected in your `opencode.json`, the plugin automatically enters coexistence mode:
 
