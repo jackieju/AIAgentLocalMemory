@@ -1386,6 +1386,7 @@ List the angles in 1-2 sentences each. Be concise.`;
     "experimental.chat.messages.transform": magicContextPresent
       ? undefined
       : async (input, output) => {
+      try { writeFileSync("/tmp/neural-transform-heartbeat.log", `${new Date().toISOString()} msgs=${output.messages?.length ?? 0}\n`, { flag: "a" }); } catch {}
       try {
         const messages = output.messages;
         if (!messages || messages.length === 0) return;
