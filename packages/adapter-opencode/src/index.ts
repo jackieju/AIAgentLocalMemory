@@ -1427,16 +1427,37 @@ List the angles in 1-2 sentences each. Be concise.`;
         currentOpenCodeSessionId = openCodeSessionId;
 
         const estimateTokens = (text: string) => {
-          let tokens = 0;
-          for (let i = 0; i < text.length; i++) {
-            const code = text.charCodeAt(i);
-            if (code > 0x4E00 && code < 0x9FFF) tokens += 0.7;
-            else if (code > 0x3000 && code < 0x303F) tokens += 0.5;
-            else if (code > 0xAC00 && code < 0xD7AF) tokens += 0.7;
-            else if (code > 0x3040 && code < 0x30FF) tokens += 0.7;
-            else tokens += 0.28;
+          if (text.length < 200) {
+            let tokens = 0;
+            for (let i = 0; i < text.length; i++) {
+              const code = text.charCodeAt(i);
+              if (code > 0x4E00 && code < 0x9FFF) tokens += 0.7;
+              else if (code > 0x3000 && code < 0x303F) tokens += 0.5;
+              else if (code > 0xAC00 && code < 0xD7AF) tokens += 0.7;
+              else if (code > 0x3040 && code < 0x30FF) tokens += 0.7;
+              else tokens += 0.28;
+            }
+            return Math.ceil(tokens);
           }
-          return Math.ceil(tokens);
+          // Longer text: sample 64 chars at 4 anchor points for CJK ratio, extrapolate.
+          const sampleSize = 64;
+          const anchors = [0, Math.floor(text.length * 0.33), Math.floor(text.length * 0.66), Math.max(0, text.length - sampleSize)];
+          let sampledChars = 0;
+          let sampledTokens = 0;
+          for (const anchor of anchors) {
+            const end = Math.min(anchor + sampleSize, text.length);
+            for (let i = anchor; i < end; i++) {
+              const code = text.charCodeAt(i);
+              if (code > 0x4E00 && code < 0x9FFF) sampledTokens += 0.7;
+              else if (code > 0x3000 && code < 0x303F) sampledTokens += 0.5;
+              else if (code > 0xAC00 && code < 0xD7AF) sampledTokens += 0.7;
+              else if (code > 0x3040 && code < 0x30FF) sampledTokens += 0.7;
+              else sampledTokens += 0.28;
+              sampledChars++;
+            }
+          }
+          const avgTokensPerChar = sampledChars > 0 ? sampledTokens / sampledChars : 0.28;
+          return Math.ceil(text.length * avgTokensPerChar);
         };
 
         const FILLER_WORDS = /\b(basically|actually|really|just|very|quite|pretty|somewhat|certainly|definitely|obviously|clearly|simply|literally|honestly|frankly|anyway|so|well|now|then|also|still|already|even)\b/gi;
@@ -1477,18 +1498,19 @@ List the angles in 1-2 sentences each. Be concise.`;
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
         const realUsage = getContextUsage(openCodeSessionId);
-        const estimatedPct = (() => {
-          let totalTokens = 0;
-          for (const msg of messages) {
-            totalTokens += 10;
-            for (const part of (msg.parts ?? [])) {
-              const text = (part as any).text ?? "";
-              if (text) totalTokens += estimateTokens(text);
-            }
-          }
-          return (totalTokens / contextLimit) * 100;
-        })();
-        const usagePct = realUsage.percentage > 0 ? realUsage.percentage : estimatedPct;
+        const usagePct = realUsage.percentage > 0
+          ? realUsage.percentage
+          : (() => {
+              let totalTokens = 0;
+              for (const msg of messages) {
+                totalTokens += 10;
+                for (const part of (msg.parts ?? [])) {
+                  const text = (part as any).text ?? "";
+                  if (text) totalTokens += estimateTokens(text);
+                }
+              }
+              return (totalTokens / contextLimit) * 100;
+            })();
 
         const lastAssistantModel = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -1974,17 +1996,9 @@ JSON:`;
           } catch {}
         }, 500);
 
-        const afterPct = (() => {
-          let totalTokens = 0;
-          for (const msg of messages) {
-            totalTokens += 10;
-            for (const part of (msg.parts ?? [])) {
-              const text = (part as any).text ?? "";
-              if (text) totalTokens += estimateTokens(text);
-            }
-          }
-          return Math.round((totalTokens / contextLimit) * 100);
-        })();
+        const afterPct = realUsage.percentage > 0
+          ? Math.round(realUsage.percentage * (rendered.length / Math.max(messages.length, 1)))
+          : Math.round((rendered.length * 500 / contextLimit) * 100);
         writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
           ts: Date.now(),
           beforePct: Math.round(usagePct || (messages.length * 500 / contextLimit) * 100),
