@@ -1,0 +1,5 @@
+training-data/
+adapters/
+benchmark-results/
+Modelfile
+.auto-train-state
