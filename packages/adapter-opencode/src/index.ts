@@ -657,6 +657,57 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
       }
     },
 
+    // Replay-mode tool interception. When env NEURAL_REPLAY_ORIG_SESSION_ID is set,
+    // every tool call is served from that session's historical opencode.db results
+    // instead of running for real. Requires the fork of opencode with the
+    // tool.execute.before shortcircuit hook (branch replay-shortcircuit).
+    "tool.execute.before": async (input: any, output: any) => {
+      try {
+        const origSid = process.env.NEURAL_REPLAY_ORIG_SESSION_ID;
+        if (!origSid) return;
+        const openCodeDbPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+        if (!existsSync(openCodeDbPath)) return;
+        let Db: any = null;
+        try { Db = require("bun:sqlite").Database; } catch {
+          try { Db = require("better-sqlite3"); } catch {}
+        }
+        if (!Db) return;
+        const db = new Db(openCodeDbPath, { readonly: true });
+        try {
+          const argsJson = JSON.stringify(output?.args ?? {});
+          const rows = db.prepare(`
+            SELECT p.data FROM part p
+            JOIN message m ON m.id = p.message_id
+            WHERE m.session_id = ?
+              AND json_extract(p.data, '$.type') = 'tool'
+              AND json_extract(p.data, '$.tool') = ?
+              AND json_extract(p.data, '$.state.status') = 'completed'
+            ORDER BY p.time_created
+          `).all(origSid, input.tool) as Array<{ data: string }>;
+          for (const row of rows) {
+            const p = JSON.parse(row.data);
+            const historyArgs = JSON.stringify(p?.state?.input ?? p?.state?.args ?? {});
+            if (historyArgs === argsJson) {
+              const state = p.state ?? {};
+              output.shortcircuit = {
+                title: state.title || `[replay: ${input.tool}]`,
+                output: typeof state.output === "string" ? state.output : JSON.stringify(state.output ?? ""),
+                metadata: state.metadata ?? {},
+              };
+              return;
+            }
+          }
+          output.shortcircuit = {
+            title: `[replay: ${input.tool} — no historical result]`,
+            output: `[replay-shortcircuit] No historical result found for tool=${input.tool} with args=${argsJson.slice(0, 200)}. Skipping real execution.`,
+            metadata: { replay: "no-history" },
+          };
+        } finally {
+          db.close();
+        }
+      } catch {}
+    },
+
     tool: {
       neural_remember: tool({
         description: "Store a memory node in the neural context engine for later associative recall.",
