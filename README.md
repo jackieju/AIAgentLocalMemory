@@ -61,7 +61,7 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 │  │  • Spreading Activation + Working Memory                   │   │
 │  │  • Context Manager (historian + compartments)              │   │
 │  │  • Experience Store (learned solutions)                    │   │
-│  │  • Training Data Collector (distillation pairs)            │   │
+│  │  • Training Data Collector (learning pairs)                │   │
 │  └──────────────────────┬─────────────────────────────────────┘   │
 ├─────────────────────────┼─────────────────────────────────────────┤
 │  ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐   │
@@ -449,7 +449,7 @@ The plugin implements a **growing local intelligence** system: a local LLM progr
 
 | Mode | Main Model | Local LLM Role | Learning Method |
 |---|---|---|---|
-| **observer** | Server LLM (OpenCode config) | Silent observer | Stores every {question, reply} pair for distillation |
+| **observer** | Server LLM (OpenCode config) | Silent observer | Stores every {question, reply} pair for learning |
 | **student** | Local LLM (OpenCode provider = ollama) | Active with safety net | Auto-escalates via `neural_ask_server` when confidence is low |
 | **primary** | Local LLM (OpenCode provider = ollama) | Fully autonomous | Only escalates when user explicitly says "问大模型" |
 | *(not configured)* | Server LLM (OpenCode config) | N/A | Plugin works normally without local learning |
@@ -469,7 +469,7 @@ User asks question → Claude answers → Plugin stores {question, answer} as tr
 
 ##### Reasoning capture (cotStrategy)
 
-Plain `{Q, A}` pairs teach the local model to imitate answer style but not reasoning. To distill reasoning too, you can capture chain-of-thought:
+Plain `{Q, A}` pairs teach the local model to imitate answer style but not reasoning. To learn reasoning too, you can capture chain-of-thought:
 
 | Strategy | Behavior | User visibility | Cost |
 |---|---|---|---|
@@ -544,6 +544,39 @@ The local LLM can run on another machine in your network:
 ```
 
 On the remote machine: `OLLAMA_HOST=0.0.0.0 ollama serve`
+
+#### Sub-agent learning
+
+Every time OpenCode goes idle, the plugin harvests training pairs not only from the **main** conversation but from **every sub-session** that was spawned during the turn — Oracle consultations, Explore/Librarian searches, Metis/Momus reviews, and any Sisyphus-Junior delegations. Each `(user prompt, assistant reply)` pair from a sub-session is written to `pairs.jsonl` with an instruction that flags it as a sub-agent style response ("reason step by step, cite evidence"). This way, the local LLM learns not just how the primary agent answers you, but how each specialist role thinks. Sub-session discovery is done via `SELECT id FROM session WHERE parent_id = ?` recursively (read-only) and capped at 50 sub-sessions per idle event for safety.
+
+#### Replaying historical sessions
+
+If you already have hundreds of past OpenCode sessions and want to mine them for training data right now (not wait for future conversations to accumulate), run the replay orchestrator:
+
+```bash
+# Replay every historical session
+packages/lora-pipeline/replay-history.sh
+
+# Replay 10 most recent sessions
+packages/lora-pipeline/replay-history.sh --limit 10
+
+# Replay only sessions from a given date onward
+packages/lora-pipeline/replay-history.sh --since 2026-06-01
+
+# Require at least 5 messages per session
+packages/lora-pipeline/replay-history.sh --min-messages 5
+```
+
+The script:
+
+1. Reads user message sequences out of your local `opencode.db` (read-only, WAL-safe).
+2. For each historical session, creates a **fresh** OpenCode session in the same project directory and feeds the user messages through `opencode run --print` one at a time.
+3. Every replayed assistant reply + every sub-agent call fired during replay goes through the normal plugin `session.idle` collector, so it ends up in `pairs.jsonl` (main + sub-agent style).
+4. When enough pairs accumulate, LoRA auto-train fires on its own.
+
+**Cost warning:** replaying consumes real LLM API tokens exactly like a live conversation. Start with `--limit 5` to gauge cost before running the full history. If you're on an Anthropic Pro/Max subscription this is effectively free (rate-limited only).
+
+**Replay is one-shot: it produces a one-time backfill of training data from history. From that point on, `session.idle` sub-agent harvesting keeps the training set growing incrementally.**
 
 #### Progression Path
 

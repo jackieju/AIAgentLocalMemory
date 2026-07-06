@@ -2403,6 +2403,58 @@ Return ONLY the rewritten version, no preamble. Format:
             }
           }
 
+          // Also harvest training pairs from every sub-session (Oracle, Explore, Librarian, Metis, Momus, Sisyphus-Junior, etc.)
+          // spawned by this session. Each sub-session is a full LLM conversation whose reasoning we'd otherwise miss.
+          try {
+            const openCodeDbPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+            if (existsSync(openCodeDbPath)) {
+              let Db: any = null;
+              try { Db = require("bun:sqlite").Database; } catch {
+                try { Db = require("better-sqlite3"); } catch {}
+              }
+              if (Db) {
+                const db = new Db(openCodeDbPath, { readonly: true });
+                try {
+                  const collected: string[] = [];
+                  const queue: string[] = [sid];
+                  while (queue.length > 0 && collected.length < 50) {
+                    const parent = queue.shift()!;
+                    const children = db.prepare("SELECT id FROM session WHERE parent_id = ?").all(parent) as Array<{ id: string }>;
+                    for (const c of children) {
+                      collected.push(c.id);
+                      queue.push(c.id);
+                    }
+                  }
+                  for (const subSid of collected) {
+                    try {
+                      const subMsgs = await client.session.messages({ path: { id: subSid }, query: {} });
+                      if (!subMsgs.data) continue;
+                      const arr = subMsgs.data;
+                      for (let i = arr.length - 1; i >= 1; i--) {
+                        if (arr[i].info.role === "assistant" && arr[i - 1].info.role === "user") {
+                          const uParts = (arr[i - 1].parts ?? []).filter((p: any) => p.type === "text");
+                          const uText = uParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+                          const aParts = (arr[i].parts ?? []).filter((p: any) => p.type === "text");
+                          const aText = aParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+                          if (uText.length < 20 || aText.length < 40) break;
+                          if (uText.length > 12000 || aText.length > 20000) break;
+                          recentPairs.push({
+                            instruction: "You are an expert sub-agent (Oracle / Explore / Librarian / Metis / Momus / Sisyphus-Junior style). Reason step by step from the request and produce a concrete, evidence-cited response.",
+                            input: uText.slice(0, 6000),
+                            output: aText.slice(0, 12000),
+                          });
+                          break;
+                        }
+                      }
+                    } catch {}
+                  }
+                } finally {
+                  db.close();
+                }
+              }
+            }
+          } catch {}
+
           if (recentPairs.length > 0) {
             const pairsFile = join(localTrainingDir, "pairs.jsonl");
             const { appendFileSync } = await import("node:fs");
