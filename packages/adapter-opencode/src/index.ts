@@ -1306,6 +1306,66 @@ List the angles in 1-2 sentences each. Be concise.`;
         },
       }),
 
+      neural_session_import: tool({
+        description:
+          "Import an OpenCode session from the sync repo into this machine's opencode.db. Use when you moved to a new machine and want to continue a session that was written on another device. Requires that the sync repo (git-backed) already has the session exported by the other machine.",
+        args: {
+          sessionId: z.string().min(1).describe("The OpenCode session ID to import, e.g. 'ses_abc123...'."),
+          overwrite: z.boolean().optional().describe("If true, re-insert messages even if they already exist locally (default false — safe idempotent replay)."),
+        },
+        async execute(args) {
+          const sessionExportDir = join(syncDir, "opencode-sessions");
+          const jsonlPath = join(sessionExportDir, `${args.sessionId}.jsonl`);
+          const metaPath = join(sessionExportDir, `${args.sessionId}.session.json`);
+          if (!existsSync(jsonlPath)) {
+            return { title: "Not found", output: `No exported data for session ${args.sessionId}. Ensure the other machine has pushed and this machine has pulled the sync repo.` };
+          }
+          const openCodeDbPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+          if (!existsSync(openCodeDbPath)) {
+            return { title: "No opencode.db", output: "OpenCode has never been run on this machine — start OpenCode once (any session) to create the database first." };
+          }
+          let Db: any = null;
+          try { Db = require("bun:sqlite").Database; } catch {
+            try { Db = require("better-sqlite3"); } catch {}
+          }
+          if (!Db) return { title: "No SQLite", output: "bun:sqlite / better-sqlite3 unavailable in this runtime." };
+
+          const db = new Db(openCodeDbPath);
+          let sessionInserted = false;
+          let msgCount = 0;
+          let partCount = 0;
+          try {
+            if (existsSync(metaPath)) {
+              const sess = JSON.parse(readFileSync(metaPath, "utf-8"));
+              const cols = Object.keys(sess);
+              const placeholders = cols.map(() => "?").join(",");
+              const verb = args.overwrite ? "INSERT OR REPLACE" : "INSERT OR IGNORE";
+              const info = db.prepare(`${verb} INTO session (${cols.map(c => `\`${c}\``).join(",")}) VALUES (${placeholders})`).run(...cols.map(c => sess[c]));
+              sessionInserted = info.changes > 0;
+            }
+            const lines = readFileSync(jsonlPath, "utf-8").split("\n").filter(l => l.trim());
+            const verbMsg = args.overwrite ? "INSERT OR REPLACE" : "INSERT OR IGNORE";
+            for (const line of lines) {
+              const { msg, parts } = JSON.parse(line) as { msg: any; parts: any[] };
+              const mCols = Object.keys(msg);
+              const mInfo = db.prepare(`${verbMsg} INTO message (${mCols.map(c => `\`${c}\``).join(",")}) VALUES (${mCols.map(() => "?").join(",")})`).run(...mCols.map(c => msg[c]));
+              if (mInfo.changes > 0) msgCount++;
+              for (const p of parts) {
+                const pCols = Object.keys(p);
+                const pInfo = db.prepare(`${verbMsg} INTO part (${pCols.map(c => `\`${c}\``).join(",")}) VALUES (${pCols.map(() => "?").join(",")})`).run(...pCols.map(c => p[c]));
+                if (pInfo.changes > 0) partCount++;
+              }
+            }
+          } finally {
+            db.close();
+          }
+          return {
+            title: "Session imported",
+            output: `Session ${args.sessionId}: ${sessionInserted ? "created" : "already existed"}; ${msgCount} new messages, ${partCount} new parts inserted. Reopen OpenCode to see the session.`,
+          };
+        },
+      }),
+
       neural_note: tool({
         description:
           "Save or manage durable notes/facts that persist across conversation and survive compression. Facts are automatically surfaced in context when relevant concepts activate.",
@@ -2200,6 +2260,59 @@ Skip the thinking block for pure greetings or one-word replies.
         if (newLineCount > existingLines) {
           writeFileSync(transcriptPath, fullContent);
         }
+
+        // Session export: opencode.db → JSONL for cross-device replay.
+        // Read-only from opencode.db (WAL-safe with the writing main process),
+        // append-only JSONL, git push piggy-backs on the existing sync timer.
+        try {
+          const sessionExportDir = join(syncDir, "opencode-sessions");
+          const { mkdirSync: mkExpDir } = await import("node:fs");
+          mkExpDir(sessionExportDir, { recursive: true });
+          const jsonlPath = join(sessionExportDir, `${sid}.jsonl`);
+          const metaPath = join(sessionExportDir, `${sid}.session.json`);
+          const statePath = join(sessionExportDir, ".exporter-state.json");
+
+          let stateAll: Record<string, string> = {};
+          try {
+            if (existsSync(statePath)) stateAll = JSON.parse(readFileSync(statePath, "utf-8"));
+          } catch {}
+          const lastMsgId = stateAll[sid] ?? "";
+
+          const openCodeDbPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+          if (existsSync(openCodeDbPath)) {
+            let Db: any = null;
+            try { Db = require("bun:sqlite").Database; } catch {
+              try { Db = require("better-sqlite3"); } catch {}
+            }
+            if (Db) {
+              const db = new Db(openCodeDbPath, { readonly: true });
+              try {
+                if (!existsSync(metaPath)) {
+                  const sessRow = db.prepare("SELECT * FROM session WHERE id = ?").get(sid);
+                  if (sessRow) writeFileSync(metaPath, JSON.stringify(sessRow, null, 2));
+                }
+
+                const newMsgs = lastMsgId
+                  ? db.prepare("SELECT * FROM message WHERE session_id = ? AND id > ? ORDER BY time_created, id").all(sid, lastMsgId)
+                  : db.prepare("SELECT * FROM message WHERE session_id = ? ORDER BY time_created, id LIMIT 500").all(sid);
+
+                if (newMsgs.length > 0) {
+                  const lines: string[] = [];
+                  const partStmt = db.prepare("SELECT * FROM part WHERE message_id = ? ORDER BY time_created, id");
+                  for (const m of newMsgs) {
+                    const parts = partStmt.all(m.id);
+                    lines.push(JSON.stringify({ msg: m, parts }));
+                  }
+                  appendFileSync(jsonlPath, lines.join("\n") + "\n");
+                  stateAll[sid] = newMsgs[newMsgs.length - 1].id;
+                  writeFileSync(statePath, JSON.stringify(stateAll, null, 2));
+                }
+              } finally {
+                db.close();
+              }
+            }
+          }
+        } catch {}
 
         if (localLlmMode === "observer" && localLlmProvider) {
           mkdirSync(localTrainingDir, { recursive: true });

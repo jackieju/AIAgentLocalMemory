@@ -252,6 +252,7 @@ Restart OpenCode.
 | `neural_expand` | Expand compressed/elided content back to full text |
 | `neural_ask_server` | Consult the server LLM for problems the local agent can't solve |
 | `neural_import_history` | Import past OpenCode sessions into the neural graph |
+| `neural_session_import` | Replay an OpenCode session exported from another machine (see [Cross-Device Session Sync](#cross-device-session-sync)) |
 | `neural_backup` | Backup the entire memory graph to a timestamped directory |
 | `neural_sync` | Synchronize memory across machines via Git (init/push/pull/status) |
 | `neural_status` | View engine stats and working memory |
@@ -711,6 +712,58 @@ The file stays in sync with the session — each idle event checks for new conte
 ```
 
 This gives you a persistent, readable copy of every conversation that survives even if the session is deleted from OpenCode.
+
+### Cross-Device Session Sync
+
+Move to a new machine and continue the same OpenCode session — including the full message history, tool calls, and reasoning — as if you never left.
+
+**How it works (design):**
+
+- **Append-only export**: On every `session.idle` event, the plugin reads OpenCode's local `opencode.db` (SQLite, WAL mode, **read-only handle**, no write contention with OpenCode's own writes) and appends any new messages/parts to `~/.local/share/ai-agent-local-memory/sync/opencode-sessions/<sessionId>.jsonl`.
+- **Per-session cursor**: `.exporter-state.json` remembers the last exported `message_id` per session, so subsequent exports are incremental — one idle event only writes the delta.
+- **First-time cap**: A brand-new session on this machine exports at most 500 messages per idle event to avoid a large blocking write; the rest is picked up on later idle events.
+- **Git-backed sync**: The `opencode-sessions/` directory lives inside the same [Distributed Sync](#distributed-sync-multi-machine) repo (`syncRepo`). The existing background sync timer commits and pushes them along with the neural graph — no extra network round-trip.
+- **Structured replay**: Each JSONL line is `{"msg": <message row>, "parts": [<part row>, ...]}` — a lossless snapshot of the OpenCode schema, not a text transcript. Replay recreates the exact same conversation OpenCode would render.
+- **Session metadata**: A one-time `<sessionId>.session.json` captures title, directory, model, and token stats so the imported session appears correctly in OpenCode's session list.
+
+**Non-blocking by design:**
+
+- **Never blocks the event loop**: only async I/O, never `execSync`.
+- **Never blocks `messages.transform`**: exports run on the `session.idle` event, after the assistant has already replied.
+- **Never writes to `opencode.db`**: read-only handle, so SQLite lock contention with OpenCode is impossible.
+- **Piggy-backs on the sync timer**: no separate git process, no extra network chatter.
+
+**Usage — export (automatic, no action required):**
+
+Whenever OpenCode goes idle, new messages of the active session are appended to the JSONL and, on the next sync tick, pushed to the sync repo.
+
+**Usage — import on a new machine:**
+
+1. Configure `syncRepo` on the new machine so its neural memory pulls from the same git repo (see [Setup](#setup)).
+2. Wait for the sync timer to pull (or run `neural_sync` action=`pull`) — this brings the `opencode-sessions/` directory to the new machine.
+3. From inside OpenCode, run the tool:
+
+   ```
+   neural_session_import(sessionId="ses_...")
+   ```
+
+   Optional: `overwrite=true` to re-insert messages even if some already exist locally (default is safe idempotent replay — duplicates are skipped via `INSERT OR IGNORE`).
+4. **Restart OpenCode** so it re-reads `opencode.db` — the imported session now appears in the session list and can be reopened with `opencode --session <sessionId>`.
+
+**Storage layout in the sync repo:**
+
+```
+<syncRepo>/opencode-sessions/
+├── ses_abc123.jsonl           append-only messages + parts
+├── ses_abc123.session.json    one-time session metadata
+├── ses_xyz789.jsonl
+├── ses_xyz789.session.json
+└── .exporter-state.json       per-session cursor (last exported message_id)
+```
+
+**Feature description:**
+
+You keep OpenCode's native single-machine session UX. Behind the scenes, every idle moment writes the incremental diff to a git-synced JSONL, so any second machine (macOS / Linux / Windows) that pulls the same repo can call one tool and pick up exactly where you left off — same messages, same tool history, same reasoning traces.
 
 ### Via Tool (in OpenCode)
 
