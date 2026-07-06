@@ -2,10 +2,16 @@
 # Replay historical OpenCode sessions in headless mode to harvest sub-agent reasoning
 # for local LLM training.
 #
+# SAFETY: replays run under `--agent oracle` (opencode read-only agent). Oracle
+# cannot invoke Edit/Write/Bash-write tools; its tool whitelist is enforced by
+# opencode runtime. Even if the replayed conversation originally used Sisyphus
+# with full write powers, this script always demotes it to Oracle so your local
+# filesystem is never modified.
+#
 # For each historical session:
 #   1. Extract the user message sequence (in time order)
 #   2. Create a NEW opencode session (marked "replay-<orig_id>")
-#   3. Feed each user message through `opencode run --print` in the new session
+#   3. Feed each user message through `opencode run --agent oracle --print`
 #   4. Every assistant reply + every sub-agent call in the replay session is now
 #      captured by the plugin's session.idle handler (see index.ts sub-session harvest)
 #   5. Training pairs land in ~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl
@@ -15,6 +21,7 @@
 #   ./replay-history.sh --limit 10            # replay 10 sessions
 #   ./replay-history.sh --min-messages 5      # only sessions with >=5 messages
 #   ./replay-history.sh --since 2026-06-01    # only sessions after this date
+#   ./replay-history.sh --agent plan          # use --agent plan instead of oracle
 #
 # Cost: replays consume LLM API tokens like real conversations. Budget accordingly.
 set -euo pipefail
@@ -23,12 +30,14 @@ DB="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"
 LIMIT=""
 MIN_MESSAGES=3
 SINCE=""
+AGENT="oracle"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --limit) LIMIT="$2"; shift 2 ;;
     --min-messages) MIN_MESSAGES="$2"; shift 2 ;;
     --since) SINCE="$2"; shift 2 ;;
+    --agent) AGENT="$2"; shift 2 ;;
     -h|--help)
       grep '^#' "$0" | head -30
       exit 0
@@ -46,6 +55,21 @@ if ! command -v opencode >/dev/null; then
   echo "opencode CLI not found in PATH" >&2
   exit 1
 fi
+
+case "$AGENT" in
+  oracle|plan|explore|librarian|metis|momus|multimodal-looker) ;;
+  *)
+    echo "SAFETY REJECT: --agent must be a read-only agent (oracle, plan, explore, librarian, metis, momus, multimodal-looker)." >&2
+    echo "Got: $AGENT" >&2
+    echo "" >&2
+    echo "Historical replay uses read-only agents so your local filesystem is never modified." >&2
+    echo "If you truly want a writable agent for replay, run the tool manually." >&2
+    exit 1
+    ;;
+esac
+
+echo "Replay agent: $AGENT (read-only, cannot modify local files)"
+echo ""
 
 WHERE="parent_id IS NULL"
 if [ -n "$SINCE" ]; then
@@ -110,7 +134,7 @@ while IFS=$'\t' read -r sid title dir user_msgs; do
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     echo "  → prompt: ${line:0:80}..."
-    (cd "$new_session_dir" && opencode run --print "$line" 2>/dev/null || true)
+    (cd "$new_session_dir" && opencode run --agent "$AGENT" --print "$line" 2>/dev/null || true)
   done < "$user_msg_file"
 
   rm -f "$user_msg_file"
@@ -122,6 +146,7 @@ echo ""
 echo "=== REPLAY DONE ==="
 echo "Replayed: $replayed sessions"
 echo "Skipped:  $skipped sessions"
+echo "Agent:    $AGENT (read-only, no local modifications made)"
 echo ""
 echo "New training pairs (main + sub-agents) collected at:"
 echo "  ~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl"
