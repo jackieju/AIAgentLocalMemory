@@ -6,31 +6,17 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 
 ## Features
 
-- **Neural memory graph** — nodes (episodes / concepts / facts / experiences) connected by weighted synapses, recalled by spreading activation instead of keyword match.
-- **Hebbian learning** — every recall strengthens co-activated edges; unused edges decay, so frequently-associated memories become easier to reach.
-- **Working memory** — a bounded queue of currently-active nodes biases retrieval toward the current train of thought.
-- **Hybrid recall scoring** — FTS5 keyword hits, embedding cosine similarity, and graph activation are combined into one ranked list.
-- **CJK-aware search** — SQLite FTS5 uses `Intl.Segmenter` for Chinese / Japanese / Korean word segmentation, no external tokenizer required.
-- **Optional embeddings** — plug any OpenAI-compatible or Ollama embedding endpoint (`nomic-embed-text`, `text-embedding-3-small`) for semantic recall on top of FTS.
-- **Cross-session recall** — search across every past OpenCode session on this machine, not just the currently open one.
-- **Compartment-based context management** — long history is compressed into `<compartment>` summaries by a background historian sub-session, keeping the recent tail full-fidelity.
-- **Budget-driven rendering** — token-budget aware, fidelity tiers (`f0`–`f4`) per message, automatic tail selection and structural noise stripping.
-- **Neural context tools** — `neural_expand`, `neural_reduce`, `neural_pin`, `neural_note` let the LLM groom its own context inside the conversation.
-- **Magic-context coexistence** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks while keeping our tools available.
-- **Growing local agent — Observer mode** — the server LLM stays the main model; the local LLM silently learns from every reply via `<thinking>` prompt injection or an idle-time post-rewrite sub-session.
-- **Growing local agent — Student mode** — the local LLM becomes the main model with automatic escalation to the server LLM when its confidence is low or the user is dissatisfied 3+ times.
-- **Growing local agent — Primary mode** — the local LLM is fully autonomous and only escalates on an explicit user command.
-- **`neural_ask_server` tool** — one call to consult the server LLM with structured `[Reasoning] + [Answer]` output; each Q&A becomes an experience node.
-- **LoRA fine-tune pipeline** — auto-triggered when enough data has accumulated, MLX-based, Qwen3 14B default, with benchmark-driven rollback if the new adapter regresses.
-- **Divergence-based training filter** — only samples where local and server answers disagreed significantly are kept, so training never wastes cycles on already-known material.
-- **Single global memory graph** — knowledge accumulated in one project is available in every project (`~/.local/share/ai-agent-local-memory/graph.db`).
-- **Append-only operation log** — every mutation is a line in `operations.jsonl`; `graph.db` is a materialized view, so git merges are conflict-free.
-- **Distributed sync via Git** — `neural_sync` init / push / pull / status, plus a background timer that auto-pushes on dirty state.
-- **Embedding cache never leaves the machine** — vectors are stripped before append to `operations.jsonl`, so each machine regenerates its own local embeddings on pull.
-- **Session transcripts** — every session's full chat history is mirrored to `transcripts/<sessionId>.md` on every idle event, human-readable and always up to date.
-- **Cross-device session sync** — every idle event also appends the raw messages + parts of the active session to `opencode-sessions/<sessionId>.jsonl` in the sync repo, so `neural_session_import(sessionId=...)` on another machine replays them into that machine's `opencode.db` and you can continue writing where you left off.
-- **Daily backup** — `opencode.db` is gzip-copied once per 24h to iCloud Drive alongside the neural configs.
-- **TUI sidebar** — live memory graph stats, sync status, compartment compression ratio, LoRA training state, session ID, and build number — all visible in the OpenCode sidebar.
+- **Unlimited context management** — long history is transparently compressed into `<compartment>` summaries by a background historian while the recent tail stays full-fidelity, so conversations don't hit a token wall.
+- **Neural memory** — an associative graph (nodes + weighted synapses, Hebbian learning, spreading activation, working memory) recalls by meaning and association instead of keyword match.
+- **Cross-project shared memory** — one global memory graph is reused across every project and every session on the machine.
+- **Cross-machine memory sync** — the memory graph replicates between machines through a Git-backed append-only operation log (conflict-free, `neural_sync` push / pull / status).
+- **Cross-device session sync** — the full raw OpenCode session (messages, tool calls, reasoning) can be replayed on a second machine via `neural_session_import`, so you switch computers and keep writing where you left off.
+- **Multilingual & semantic search** — SQLite FTS5 with `Intl.Segmenter` for CJK, plus optional embedding-based semantic recall through any OpenAI-compatible or Ollama endpoint.
+- **Growing local agent** — an optional local LLM (Qwen3 14B via Ollama by default) that runs in three modes — Observer (silently learns from the server LLM), Student (auto-escalates when unsure), or Primary (fully autonomous) — with a LoRA fine-tune pipeline that trains on divergence-filtered Q&A pairs and rolls back on regression.
+- **Escalation on demand** — `neural_ask_server` lets the local agent consult the server LLM with a structured `[Reasoning] + [Answer]` prompt and stores every response as a reusable experience node.
+- **Automatic session persistence** — every conversation is mirrored to a readable Markdown transcript, and the underlying `opencode.db` is gzip-backed up daily to iCloud.
+- **Live TUI sidebar** — memory graph stats, sync state, context compression ratio, and LoRA training progress are visible directly inside the OpenCode sidebar.
+- **Magic-context coexistence** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks while keeping the neural tools available.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
