@@ -1,6 +1,6 @@
 # LoRA Fine-tune Pipeline
 
-Trains a local LLM (Qwen3 8B) on accumulated experience data from `neural_ask_server` consultations.
+Trains a local LLM (Qwen3 14B) on accumulated experience data from `neural_ask_server` consultations.
 
 ## Prerequisites
 
