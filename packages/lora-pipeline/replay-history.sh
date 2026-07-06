@@ -25,12 +25,28 @@
 #      sub-agent call into ~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl
 #
 # Usage:
-#   ./replay-history.sh                       # replay all historical sessions
-#   ./replay-history.sh --limit 10            # replay 10 sessions
+#   ./replay-history.sh                       # replay all historical sessions (oldest first)
+#   ./replay-history.sh --limit 10            # replay 10 oldest sessions
+#   ./replay-history.sh --recent --limit 10   # replay 10 most recent sessions instead
 #   ./replay-history.sh --min-messages 5      # only sessions with >=5 messages
 #   ./replay-history.sh --since 2026-06-01    # only sessions after this date
+#   ./replay-history.sh --parallel 4          # run up to 4 sessions concurrently
 #   ./replay-history.sh --agent oracle        # force fallback read-only agent mode
 #   ./replay-history.sh --stock-opencode      # skip fork, use system opencode
+#
+# Order: sessions replay OLDEST FIRST by default so later sessions can build on
+# any state established by earlier ones. Use --recent to reverse.
+#
+# Parallelism: default 1 (serial). All concurrent workers share ONE isolated
+# opencode.db under /tmp/replay-opencode-isolated/db — same pattern as running
+# 5-6 live opencode sessions concurrently. SQLite WAL handles the write locks.
+# The shared pairs.jsonl is safe for concurrent line-appends because Node's
+# appendFileSync is atomic for small writes. Watch API rate limits — 5 is
+# capped as the hard maximum.
+#
+# Isolation: replay runs against isolated opencode.db instances under
+# /tmp/replay-opencode-isolated-*/db so your live ~/.local/share/opencode/opencode.db
+# is never modified.
 #
 # Cost: replays consume LLM API tokens like real conversations. Budget accordingly.
 set -euo pipefail
@@ -42,6 +58,8 @@ SINCE=""
 AGENT=""
 FORK_BIN="$HOME/.local/bin/opencode-fork"
 STOCK_OPENCODE=""
+SESSION_ORDER="ASC"
+PARALLEL=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -50,8 +68,10 @@ while [[ $# -gt 0 ]]; do
     --since) SINCE="$2"; shift 2 ;;
     --agent) AGENT="$2"; shift 2 ;;
     --stock-opencode) STOCK_OPENCODE=1; shift ;;
+    --recent) SESSION_ORDER="DESC"; shift ;;
+    --parallel) PARALLEL="$2"; shift 2 ;;
     -h|--help)
-      grep '^#' "$0" | head -38
+      grep '^#' "$0" | head -40
       exit 0
       ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -103,6 +123,25 @@ echo "Binary:      $OPENCODE_BIN"
 [ "$REPLAY_MODE" = "shortcircuit" ] && echo "Interception: plugin.tool.execute.before -> historical result replay (zero side effects)"
 echo ""
 
+REPLAY_ISOLATED_DIR="/tmp/replay-opencode-isolated"
+mkdir -p "$REPLAY_ISOLATED_DIR/db" "$REPLAY_ISOLATED_DIR/config"
+if [ ! -f "$REPLAY_ISOLATED_DIR/config/opencode.jsonc" ]; then
+  cp "$HOME/.config/opencode/opencode.jsonc" "$REPLAY_ISOLATED_DIR/config/opencode.jsonc" 2>/dev/null || true
+  cp "$HOME/.config/opencode/tui.json" "$REPLAY_ISOLATED_DIR/config/tui.json" 2>/dev/null || true
+  cp "$HOME/.config/opencode/neural-context.json" "$REPLAY_ISOLATED_DIR/config/neural-context.json" 2>/dev/null || true
+fi
+
+REPLAY_OPENCODE_DB="$REPLAY_ISOLATED_DIR/db/opencode.db"
+export OPENCODE_DB="$REPLAY_OPENCODE_DB"
+export OPENCODE_CONFIG_DIR="$REPLAY_ISOLATED_DIR/config"
+export NEURAL_REPLAY_HISTORY_DB="$DB"
+
+echo "Isolated DB:     $OPENCODE_DB"
+echo "Isolated config: $OPENCODE_CONFIG_DIR"
+echo "History source:  $NEURAL_REPLAY_HISTORY_DB (read-only, for shortcircuit lookup)"
+echo "(Your live opencode session at ~/.local/share/opencode/opencode.db is not touched)"
+echo ""
+
 WHERE="parent_id IS NULL"
 if [ -n "$SINCE" ]; then
   SINCE_MS=$(date -j -f "%Y-%m-%d" "$SINCE" "+%s")000
@@ -114,7 +153,7 @@ SELECT s.id, s.title, s.directory, (SELECT COUNT(*) FROM message m WHERE m.sessi
 FROM session s
 WHERE $WHERE
   AND (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) >= $MIN_MESSAGES
-ORDER BY s.time_created DESC
+ORDER BY s.time_created ${SESSION_ORDER}
 ${LIMIT:+LIMIT $LIMIT}"
 
 echo "Discovering historical sessions..."
@@ -123,24 +162,31 @@ count=$(echo "$sessions" | wc -l | tr -d ' ')
 echo "Found $count historical sessions to replay"
 echo ""
 
-replayed=0
-skipped=0
-while IFS=$'\t' read -r sid title dir user_msgs; do
-  [ -z "$sid" ] && continue
+if [ "$PARALLEL" -lt 1 ] || [ "$PARALLEL" -gt 5 ]; then
+  echo "SAFETY REJECT: --parallel must be between 1 and 5 (got: $PARALLEL)." >&2
+  echo "5 is capped to avoid overwhelming the LLM API or SQLite WAL." >&2
+  exit 1
+fi
+
+replay_one() {
+  local sid="$1"
+  local title="$2"
+  local dir="$3"
+  local user_msgs="$4"
+  local slot="$5"
 
   if [ ! -d "$dir" ]; then
-    echo "  SKIP $sid — directory gone: $dir"
-    skipped=$((skipped+1))
-    continue
+    echo "[slot $slot] SKIP $sid — directory gone: $dir"
+    return 1
   fi
 
   echo ""
-  echo "=== REPLAY [$((replayed+1))/$count] $sid ==="
-  echo "  title: $title"
-  echo "  dir:   $dir"
-  echo "  user messages: $user_msgs"
+  echo "[slot $slot] === REPLAY $sid ==="
+  echo "[slot $slot]   title: $title"
+  echo "[slot $slot]   dir:   $dir"
+  echo "[slot $slot]   user messages: $user_msgs"
 
-  user_msg_file="/tmp/replay-msgs-$sid.jsonl"
+  local user_msg_file="/tmp/replay-msgs-$sid.jsonl"
   sqlite3 -readonly "$DB" "
     SELECT json_object('text', json_extract(p.data, '\$.text'))
     FROM message m JOIN part p ON m.id = p.message_id
@@ -152,49 +198,69 @@ while IFS=$'\t' read -r sid title dir user_msgs; do
     ORDER BY p.time_created;
   " > "$user_msg_file"
 
-  msg_count=$(grep -c . "$user_msg_file" || true)
+  local msg_count=$(grep -c . "$user_msg_file" || true)
   if [ "$msg_count" -lt 1 ]; then
-    echo "  SKIP — no valid user messages"
+    echo "[slot $slot]   SKIP — no valid user messages"
     rm -f "$user_msg_file"
-    skipped=$((skipped+1))
-    continue
+    return 1
   fi
 
-  new_session_dir="/tmp/replay-$sid"
+  local new_session_dir="/tmp/replay-$sid"
   mkdir -p "$new_session_dir"
 
-  first=1
   while IFS= read -r json_line; do
     [ -z "$json_line" ] && continue
-    prompt=$(echo "$json_line" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).text)}catch{}})')
+    local prompt=$(echo "$json_line" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{process.stdout.write(JSON.parse(d).text)}catch{}})')
     [ -z "$prompt" ] && continue
-    echo "  → prompt: ${prompt:0:100}..."
+    echo "[slot $slot]   → prompt: ${prompt:0:80}..."
     if [ "$REPLAY_MODE" = "shortcircuit" ]; then
-      if [ "$first" = "1" ]; then
-        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
-      else
-        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
-      fi
+      (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
     else
-      if [ "$first" = "1" ]; then
-        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
-      else
-        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
-      fi
+      (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
     fi
-    first=0
   done < "$user_msg_file"
 
   rm -f "$user_msg_file"
   rm -rf "$new_session_dir"
-  replayed=$((replayed+1))
+  return 0
+}
+
+replayed=0
+skipped=0
+launched=0
+while IFS=$'\t' read -r sid title dir user_msgs; do
+  [ -z "$sid" ] && continue
+  launched=$((launched+1))
+  slot=$(( (launched - 1) % PARALLEL + 1 ))
+
+  if [ "$PARALLEL" -eq 1 ]; then
+    if replay_one "$sid" "$title" "$dir" "$user_msgs" "$slot"; then
+      replayed=$((replayed+1))
+    else
+      skipped=$((skipped+1))
+    fi
+  else
+    while [ "$(jobs -rp | wc -l)" -ge "$PARALLEL" ]; do
+      wait -n 2>/dev/null || sleep 1
+    done
+    replay_one "$sid" "$title" "$dir" "$user_msgs" "$slot" &
+  fi
 done <<< "$sessions"
+
+if [ "$PARALLEL" -gt 1 ]; then
+  echo ""
+  echo "waiting for remaining $PARALLEL parallel workers to finish..."
+  wait
+  replayed=$launched
+fi
 
 echo ""
 echo "=== REPLAY DONE ==="
-echo "Replayed: $replayed sessions"
-echo "Skipped:  $skipped sessions"
+echo "Launched: $launched sessions"
+echo "Serial replay count: $replayed (parallel mode reports launched count)"
+echo "Skipped:  $skipped sessions (serial mode)"
 echo "Mode:     $REPLAY_MODE"
+echo "Parallel: $PARALLEL"
 echo ""
 echo "New training pairs (main + sub-agents) collected at:"
 echo "  ~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl"

@@ -665,7 +665,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
       try {
         const origSid = process.env.NEURAL_REPLAY_ORIG_SESSION_ID;
         if (!origSid) return;
-        const openCodeDbPath = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+        const openCodeDbPath = process.env.NEURAL_REPLAY_HISTORY_DB || join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
         if (!existsSync(openCodeDbPath)) return;
         let Db: any = null;
         try { Db = require("bun:sqlite").Database; } catch {
@@ -675,6 +675,8 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
         const db = new Db(openCodeDbPath, { readonly: true });
         try {
           const argsJson = JSON.stringify(output?.args ?? {});
+          const currentArgs = output?.args ?? {};
+          const currentKey = currentArgs.filePath || currentArgs.path || currentArgs.file || currentArgs.pattern || currentArgs.command || currentArgs.query || currentArgs.url;
           const rows = db.prepare(`
             SELECT p.data FROM part p
             JOIN message m ON m.id = p.message_id
@@ -686,14 +688,18 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
           `).all(origSid, input.tool) as Array<{ data: string }>;
           for (const row of rows) {
             const p = JSON.parse(row.data);
-            const historyArgs = JSON.stringify(p?.state?.input ?? p?.state?.args ?? {});
-            if (historyArgs === argsJson) {
+            const historyArgs = p?.state?.input ?? p?.state?.args ?? {};
+            const historyKey = historyArgs.filePath || historyArgs.path || historyArgs.file || historyArgs.pattern || historyArgs.command || historyArgs.query || historyArgs.url;
+            const exactMatch = JSON.stringify(historyArgs) === argsJson;
+            const keyMatch = currentKey && historyKey && currentKey === historyKey;
+            if (exactMatch || keyMatch) {
               const state = p.state ?? {};
               output.shortcircuit = {
                 title: state.title || `[replay: ${input.tool}]`,
                 output: typeof state.output === "string" ? state.output : JSON.stringify(state.output ?? ""),
                 metadata: state.metadata ?? {},
               };
+              if (process.env.NEURAL_REPLAY_AUDIT) appendFileSync("/tmp/neural-shortcircuit-audit.log", `[${new Date().toISOString()}] MATCH(${exactMatch ? "exact" : "key"}) tool=${input.tool} outLen=${output.shortcircuit.output.length}\n`);
               return;
             }
           }
@@ -702,6 +708,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
             output: `[replay-shortcircuit] No historical result found for tool=${input.tool} with args=${argsJson.slice(0, 200)}. Skipping real execution.`,
             metadata: { replay: "no-history" },
           };
+          if (process.env.NEURAL_REPLAY_AUDIT) appendFileSync("/tmp/neural-shortcircuit-audit.log", `[${new Date().toISOString()}] NO_MATCH tool=${input.tool} args=${argsJson.slice(0, 150)}\n`);
         } finally {
           db.close();
         }
