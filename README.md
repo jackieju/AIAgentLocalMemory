@@ -4,6 +4,67 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 
 **Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time. Dont' waste any token any chat any dollar in your daily talk with LLM, which can make your local LLM smarter everyday.
 
+## Features
+
+**Memory & recall**
+
+- **Neural memory graph** — nodes (episodes / concepts / facts / experiences) connected by weighted synapses; recall by spreading activation instead of keyword match.
+- **Hebbian learning** — every recall strengthens co-activated edges; unused edges decay. Frequently associated memories become easier to reach.
+- **Working memory** — bounded queue of currently active nodes (recency + activation) that biases retrieval toward the current train of thought.
+- **Hybrid scoring** — FTS5 keyword hits, embedding cosine similarity, and graph activation are combined into one ranked list per recall.
+- **CJK-aware search** — SQLite FTS5 uses `Intl.Segmenter` for Chinese / Japanese / Korean word segmentation, no external tokenizer required.
+- **Optional embeddings** — plug any OpenAI-compatible or Ollama embedding endpoint (`nomic-embed-text`, `text-embedding-3-small`, etc.) to add semantic recall alongside FTS.
+- **Cross-session recall** — search across every past OpenCode session on this machine, not just the currently open one.
+
+**Context management (OpenCode `messages.transform`)**
+
+- **Compartments** — long history is compressed into `<compartment>` summaries by a background historian sub-session, keeping the recent tail full-fidelity.
+- **Budget-driven rendering** — token budget aware, fidelity tiers (`f0`–`f4`) per message, with automatic tail selection and structural noise stripping.
+- **Neural tools** — `neural_expand`, `neural_reduce`, `neural_pin`, `neural_note` for LLM-driven context grooming inside the conversation.
+- **Coexistence mode** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks; tools stay available.
+
+**Growing local agent (three modes)**
+
+- **Observer mode** — Claude / GPT stays the main model; the local LLM silently learns from every reply. Distillation data is captured either via `<thinking>` prompt injection or an idle-time post-rewrite sub-session.
+- **Student mode** — the local LLM becomes the main model with automatic escalation to the server LLM when its confidence is low or the user is dissatisfied 3+ times.
+- **Primary mode** — the local LLM is fully autonomous; only escalates on an explicit user command.
+- **`neural_ask_server`** — one tool call to consult the server LLM with structured `[Reasoning] + [Answer]` output. Each Q&A becomes an experience node.
+- **LoRA fine-tune pipeline** — auto-triggered when enough data has accumulated (`packages/lora-pipeline/auto-train.sh`, MLX-based, Qwen3 14B default). Rollback if the new adapter regresses on the benchmark.
+- **Divergence-based training filter** — only samples where local answer and server answer disagreed significantly (`divergence ≥ 0.3` by default) are kept — no wasted training on already-known material.
+
+**Storage & sync**
+
+- **Single global graph** at `~/.local/share/ai-agent-local-memory/graph.db` — knowledge accumulated in one project is available in every project.
+- **Append-only operation log** — every mutation is a line in `operations.jsonl`; `graph.db` is a materialized view. Conflict-free git merges.
+- **Distributed sync via Git** — `neural_sync` init / push / pull / status; background timer auto-pushes on dirty state.
+- **Embedding cache never syncs** — vectors are stripped before append to `operations.jsonl`; each machine regenerates its own local embeddings on pull.
+
+**Session persistence**
+
+- **Session transcripts** — every session's full chat history is mirrored to `transcripts/<sessionId>.md` on every `session.idle` event, human-readable and always up to date.
+- **Cross-device session sync** — new. Every `session.idle` also appends the incremental raw messages + parts of the active session to `opencode-sessions/<sessionId>.jsonl` in the sync repo. Read-only handle on `opencode.db`, per-session cursor, first-time cap at 500 msg/tick. On a new machine, `neural_session_import(sessionId=...)` replays the JSONL back into that machine's `opencode.db` so you can `opencode --session <id>` and continue writing where you left off.
+- **Daily backup** — `opencode.db` is gzip-copied once per 24h to iCloud Drive (`opencode-backup/opencode.db.gz`) alongside the neural configs.
+
+**TUI sidebar**
+
+- Live memory graph stats (nodes / edges / working memory / node type breakdown).
+- Sync status (ops count, last push, repo).
+- Compartment compression ratio (`before% / after%`).
+- LoRA training state (last run time, improved / degraded, total runs, improvement count, in-progress indicator).
+- Session ID and build number.
+
+**Tooling**
+
+- Full tool set: `neural_remember`, `neural_recall`, `neural_forget`, `neural_note`, `neural_reduce`, `neural_pin`, `neural_expand`, `neural_ask_server`, `neural_import_history`, `neural_session_import`, `neural_backup`, `neural_sync`, `neural_status`, `neural_export_training`.
+- Two switching scripts (`~/use-ai-agent-local-memory.sh`, `~/use-magic-context.sh`) — one command flips both `opencode.jsonc` and `tui.json`, autoconfigures OpenCode's `small_model` to the local LLM in observer / student / primary mode, preserves your custom theme.
+
+**Non-blocking guarantees**
+
+- Never runs `execSync` on the event loop.
+- Never touches the network inside `messages.transform`.
+- `opencode.db` is only ever opened read-only from within the plugin — no lock contention with OpenCode's main writer.
+- All git operations run on a low-priority background timer, async, timeouts bounded.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                                                             │
