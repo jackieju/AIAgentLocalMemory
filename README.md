@@ -96,6 +96,7 @@ Every conversation you have through OpenCode with this plugin is split into two 
                      ▼                           ▼
      ┌─────────────────────────┐   ┌─────────────────────────────┐
      │  Project-specific facts │   │  General reasoning & skills │
+     │                         │   │        (optional)           │
      │  ─────────────────────  │   │  ─────────────────────────  │
      │  • file paths           │   │  • how to debug a           │
      │  • bug root causes      │   │    race condition           │
@@ -439,7 +440,7 @@ The plugin implements a **growing local intelligence** system: a local LLM progr
     },
     "training": {
       "triggerCount": 100,                   // LoRA training triggers after this many training pairs
-      "cotStrategy": "thinking-tag"          // How to capture reasoning in observer mode
+      "cotStrategy": "none"                  // Reasoning capture: "none" (default, opt-in) | "thinking-tag" | "post-rewrite"
     }
   }
 }
@@ -467,17 +468,17 @@ User asks question → Claude answers → Plugin stores {question, answer} as tr
 - No impact on response quality — server LLM handles everything
 - Ideal starting point: accumulate data before switching to student/primary mode
 
-##### Reasoning capture (cotStrategy)
+##### Reasoning capture (cotStrategy, opt-in)
 
-Plain `{Q, A}` pairs teach the local model to imitate answer style but not reasoning. To learn reasoning too, you can capture chain-of-thought:
+Plain `{Q, A}` pairs teach the local model to imitate answer style but not reasoning. **By default the plugin does NOT force any reasoning capture** — every conversation stays exactly as the server LLM naturally responds and you never pay a token surcharge or wait for a rewrite. If you want reasoning in the training data too, you can opt in to chain-of-thought capture:
 
 | Strategy | Behavior | User visibility | Cost |
 |---|---|---|---|
-| **`thinking-tag`** (default) | Server LLM wraps reasoning in `<thinking>...</thinking>` tags before the final answer. Both are stored as training output. | Hidden by OpenCode UI | No extra API calls |
-| **`post-rewrite`** | Original conversation runs normally. After session idle, a sub-session asks the server LLM to rewrite the reply as `[Reasoning] + [Answer]` and stores the rewrite. | User sees original reply as-is | One extra API call per Q&A pair (background) |
-| **`none`** | No reasoning capture. Store `{Q, A}` as-is. | — | Zero |
+| **`none`** (default) | No reasoning capture. Store `{Q, A}` as-is. | Nothing added to responses | Zero |
+| **`thinking-tag`** | Server LLM wraps reasoning in `<thinking>...</thinking>` tags before the final answer. Both are stored as training output. | Hidden by most TUI themes, but does inflate response length | No extra API calls |
+| **`post-rewrite`** | Original conversation runs normally. After session idle, a background sub-session asks the server LLM to rewrite the reply as `[Reasoning] + [Answer]` and stores the rewrite. | User sees the original reply as-is | One extra API call per Q&A pair (background) |
 
-Configure via `localLlm.training.cotStrategy`. Default: `thinking-tag`.
+Configure via `localLlm.training.cotStrategy`. **Default: `none`** — reasoning capture is entirely optional. You decide which conversations get reasoning distilled and when.
 
 #### Student Mode
 

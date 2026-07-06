@@ -190,7 +190,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const confidenceThreshold = pluginConfig.localLlm?.confidence?.userThreshold ?? 0.5;
   const autoEscalateAfter = pluginConfig.localLlm?.confidence?.autoEscalateAfter ?? 3;
   const trainingTriggerCount = pluginConfig.localLlm?.training?.triggerCount ?? (localLlmMode === "observer" ? 100 : 50);
-  const cotStrategy = pluginConfig.localLlm?.training?.cotStrategy ?? "thinking-tag";
+  const cotStrategy = pluginConfig.localLlm?.training?.cotStrategy ?? "none";
 
   try {
     await engine.init({ storage, projectId: "global", episodesDir, llm: llmProvider, embedding: embeddingProvider });
