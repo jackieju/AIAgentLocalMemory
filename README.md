@@ -53,18 +53,6 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 - LoRA training state (last run time, improved / degraded, total runs, improvement count, in-progress indicator).
 - Session ID and build number.
 
-**Tooling**
-
-- Full tool set: `neural_remember`, `neural_recall`, `neural_forget`, `neural_note`, `neural_reduce`, `neural_pin`, `neural_expand`, `neural_ask_server`, `neural_import_history`, `neural_session_import`, `neural_backup`, `neural_sync`, `neural_status`, `neural_export_training`.
-- Two switching scripts (`~/use-ai-agent-local-memory.sh`, `~/use-magic-context.sh`) — one command flips both `opencode.jsonc` and `tui.json`, autoconfigures OpenCode's `small_model` to the local LLM in observer / student / primary mode, preserves your custom theme.
-
-**Non-blocking guarantees**
-
-- Never runs `execSync` on the event loop.
-- Never touches the network inside `messages.transform`.
-- `opencode.db` is only ever opened read-only from within the plugin — no lock contention with OpenCode's main writer.
-- All git operations run on a low-priority background timer, async, timeouts bounded.
-
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                                                             │
