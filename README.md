@@ -123,7 +123,7 @@ Every conversation you have through OpenCode with this plugin is split into two 
      └─────────────────────────┘   └─────────────────────────────┘
 ```
 
-**Every time you learn from a server LLM, the local LLM learns too.** Project facts flow into the memory graph so future conversations recall them by association. General reasoning and problem-solving patterns flow into training pairs so, after enough LoRA cycles, the local model can handle familiar shapes of problems on its own — no cloud API required.
+**Every time you learn from an LLM, your local LLM is learning more.** Project facts flow into the memory graph so future conversations recall them by association. General reasoning and problem-solving patterns flow into training pairs so, after enough LoRA cycles, the local model can handle familiar shapes of problems on its own — no cloud API required.
 
 ## Enterprise Use Case: Shared Growing Intelligence
 
