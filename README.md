@@ -81,6 +81,50 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+### Knowledge routing — where does what you learn end up?
+
+Every conversation you have through OpenCode with this plugin is split into two streams:
+
+```
+                    ┌──────────────────────────────┐
+                    │   You (user)  ↔  Agent + LLM │
+                    │        (a conversation)      │
+                    └──────────────┬───────────────┘
+                                   │
+                     ┌─────────────┴─────────────┐
+                     │                           │
+                     ▼                           ▼
+     ┌─────────────────────────┐   ┌─────────────────────────────┐
+     │  Project-specific facts │   │  General reasoning & skills │
+     │  ─────────────────────  │   │  ─────────────────────────  │
+     │  • file paths           │   │  • how to debug a           │
+     │  • bug root causes      │   │    race condition           │
+     │  • config values        │   │  • when to consult Oracle   │
+     │  • naming conventions   │   │  • how to structure a       │
+     │  • decisions made       │   │    good commit message      │
+     │  • what breaks what     │   │  • language-agnostic        │
+     │                         │   │    problem-solving patterns │
+     └────────────┬────────────┘   └───────────────┬─────────────┘
+                  │                                │
+                  ▼                                ▼
+     ┌─────────────────────────┐   ┌─────────────────────────────┐
+     │  Global Memory Graph    │   │  Local LLM (fine-tuned)     │
+     │  (SQLite + FTS +        │   │  (Qwen3 14B + LoRA)         │
+     │   embeddings + git)     │   │                             │
+     │                         │   │  Trained from Q&A pairs     │
+     │  Recalled by            │   │  captured in Observer /     │
+     │  neural_recall,         │   │  Student mode. Each         │
+     │  spreading activation.  │   │  auto-triggered LoRA run    │
+     │                         │   │  makes it a little more     │
+     │  Shared across every    │   │  capable, permanently.      │
+     │  project on this        │   │                             │
+     │  machine and every      │   │                             │
+     │  machine you sync to.   │   │                             │
+     └─────────────────────────┘   └─────────────────────────────┘
+```
+
+**Every time you learn from a server LLM, the local LLM learns too.** Project facts flow into the memory graph so future conversations recall them by association. General reasoning and problem-solving patterns flow into training pairs so, after enough LoRA cycles, the local model can handle familiar shapes of problems on its own — no cloud API required.
+
 ## Enterprise Use Case: Shared Growing Intelligence
 
 For large teams working on complex projects, the plugin creates a **collective intelligence** that grows across all team members:
