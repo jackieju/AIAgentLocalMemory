@@ -555,7 +555,7 @@ Every time OpenCode goes idle, the plugin harvests training pairs not only from 
 If you already have hundreds of past OpenCode sessions and want to mine them for training data right now (not wait for future conversations to accumulate), run the replay orchestrator:
 
 ```bash
-# Replay every historical session
+# Replay every historical session (default: shortcircuit mode via forked opencode)
 packages/lora-pipeline/replay-history.sh
 
 # Replay 10 most recent sessions
@@ -566,18 +566,59 @@ packages/lora-pipeline/replay-history.sh --since 2026-06-01
 
 # Require at least 5 messages per session
 packages/lora-pipeline/replay-history.sh --min-messages 5
+
+# Fallback: use stock opencode with a read-only agent
+packages/lora-pipeline/replay-history.sh --agent oracle
 ```
 
-The script:
+The script has **two safety modes** that both guarantee zero modifications to your local filesystem:
+
+**Mode 1 — Shortcircuit (default, highest reasoning fidelity):**
+
+- Uses a forked opencode binary at `~/.local/bin/opencode-fork` from [jackieju/opencode branch replay-shortcircuit](https://github.com/jackieju/opencode/tree/replay-shortcircuit), which adds an optional `shortcircuit` field to the `tool.execute.before` plugin hook. When a plugin sets it, opencode skips the real tool execution and returns that value as the tool_result.
+- Runs the **complete Sisyphus agent** — same system prompt, same permitted tools, same sub-agent dispatch (Oracle, Explore, Librarian, Metis, Momus, Sisyphus-Junior). Every reasoning step is identical to the original conversation.
+- The plugin's `tool.execute.before` hook, activated by env var `NEURAL_REPLAY_ORIG_SESSION_ID`, queries the original session's `opencode.db` for a completed tool call matching the current tool name + args, and returns the historical result via shortcircuit. Every Read, Grep, Edit, Write, Bash, WebFetch, etc. is served from history — **the real tool is never executed.**
+- A PR upstreaming the hook change to opencode: [anomalyco/opencode#35613](https://github.com/anomalyco/opencode/pull/35613). Until it lands, use the fork.
+
+**Mode 2 — Read-only agent (fallback, if fork is missing):**
+
+- Uses stock opencode with `--agent oracle` (or another opencode-defined read-only agent: `plan`, `explore`, `librarian`, `metis`, `momus`, `multimodal-looker`).
+- Opencode's runtime enforces the agent's tool whitelist — Edit / Write / Bash-write are hard-rejected, so nothing gets modified.
+- Reasoning fidelity is lower because the agent's persona and available tools differ from the original Sisyphus run.
+
+The orchestrator picks Mode 1 automatically when the fork binary exists; falls back to Mode 2 when you pass `--agent`; otherwise refuses to run.
+
+**Building the fork:**
+
+```bash
+# One-time setup
+git clone git@github.com:jackieju/opencode.git ~/Desktop/ju/projects/opencode
+cd ~/Desktop/ju/projects/opencode
+git checkout replay-shortcircuit
+bun install
+cd packages/opencode
+bun run build --single --skip-embed-web-ui
+
+# Symlink so replay-history.sh finds it
+ln -sf ~/Desktop/ju/projects/opencode/packages/opencode/dist/opencode-darwin-arm64/bin/opencode ~/.local/bin/opencode-fork
+```
+
+The build takes ~2 minutes; the smoke test at the end prints `Smoke test passed: 0.0.0-replay-shortcircuit-<timestamp>`.
+
+**How replay works (both modes):**
 
 1. Reads user message sequences out of your local `opencode.db` (read-only, WAL-safe).
-2. For each historical session, creates a **fresh** OpenCode session in the same project directory and feeds the user messages through `opencode run --print` one at a time.
-3. Every replayed assistant reply + every sub-agent call fired during replay goes through the normal plugin `session.idle` collector, so it ends up in `pairs.jsonl` (main + sub-agent style).
-4. When enough pairs accumulate, LoRA auto-train fires on its own.
+2. For each historical session, spawns a fresh headless opencode conversation in a scratch directory under `/tmp/replay-<sessionId>/`.
+3. Feeds the user messages through `opencode run --print` one at a time (first with a fresh session, subsequent with `--continue`).
+4. In Mode 1, every tool call is served from history via shortcircuit; in Mode 2, write tools are hard-rejected by the agent's whitelist.
+5. Every replayed assistant reply + every sub-agent call goes through the plugin's `session.idle` collector so it ends up in `pairs.jsonl` (main + sub-agent style).
+6. When enough pairs accumulate, LoRA auto-train fires on its own.
 
 **Cost warning:** replaying consumes real LLM API tokens exactly like a live conversation. Start with `--limit 5` to gauge cost before running the full history. If you're on an Anthropic Pro/Max subscription this is effectively free (rate-limited only).
 
 **Replay is one-shot: it produces a one-time backfill of training data from history. From that point on, `session.idle` sub-agent harvesting keeps the training set growing incrementally.**
+
+**Known limitation:** `opencode run --print` is a headless one-shot invocation that may not always fire the `session.idle` event our collector relies on. End-to-end training-pair harvest during replay is under active integration — the safety mechanism (no local modifications) has been verified, but pairs.jsonl growth during a headless replay may lag until we wire an alternate trigger. Live interactive sessions continue to collect pairs normally.
 
 #### Progression Path
 

@@ -18,7 +18,7 @@
 # For each historical session:
 #   1. Extract the user message sequence (in time order)
 #   2. Create a NEW opencode session
-#   3. Feed each user message through `opencode run --print` in the new session
+#   3. Feed each user message through `opencode run` in the new session
 #   4. All tool calls short-circuit to historical results (fork mode) OR
 #      run under a read-only agent (fallback mode)
 #   5. The plugin's session.idle handler harvests every reply + every
@@ -171,15 +171,15 @@ while IFS=$'\t' read -r sid title dir user_msgs; do
     echo "  → prompt: ${prompt:0:100}..."
     if [ "$REPLAY_MODE" = "shortcircuit" ]; then
       if [ "$first" = "1" ]; then
-        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run --print -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
+        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
       else
-        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run --print -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
+        (cd "$new_session_dir" && NEURAL_REPLAY_ORIG_SESSION_ID="$sid" "$OPENCODE_BIN" run -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
       fi
     else
       if [ "$first" = "1" ]; then
-        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" --print -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
+        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" -m anthropic/claude-sonnet-4-6 "$prompt" 2>/dev/null || true)
       else
-        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" --print -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
+        (cd "$new_session_dir" && "$OPENCODE_BIN" run --agent "$AGENT" -m anthropic/claude-sonnet-4-6 -c "$prompt" 2>/dev/null || true)
       fi
     fi
     first=0
