@@ -605,15 +605,42 @@ ${context}
     if (learnFrom === "reasoning") {
       prompt += `
 ## Instructions
-Explain your REASONING PROCESS step by step. Focus on HOW you think about this problem, not just the answer. The goal is to teach the junior to solve similar problems independently in the future.`;
+Explain your REASONING PROCESS step by step. Focus on HOW you think about this problem, not just the answer. The goal is to teach the junior to solve similar problems independently in the future.
+
+## Required Response Format
+Your response MUST be structured EXACTLY as follows, with these exact section headers:
+
+[Reasoning]
+<Your step-by-step thinking process. Show HOW you approach the problem: what you notice first, what hypotheses you consider, why you rule some out, how you narrow down. This is the most important section for teaching.>
+
+[Answer]
+<Your final concrete answer, with code/commands/config as needed.>`;
     } else if (learnFrom === "solution") {
       prompt += `
 ## Instructions
-Provide a clear, actionable SOLUTION. Be specific with code examples, commands, or configurations as needed.`;
+Provide a clear, actionable SOLUTION. Be specific with code examples, commands, or configurations as needed.
+
+## Required Response Format
+Your response MUST be structured EXACTLY as follows, with these exact section headers:
+
+[Reasoning]
+<Brief explanation of your approach — why this solution works and what alternatives you considered.>
+
+[Answer]
+<Your concrete solution with code/commands/configs.>`;
     } else {
       prompt += `
 ## Instructions
-First explain your reasoning process (how you approach this problem), then provide a concrete solution. The goal is both to solve the immediate problem AND teach the junior to handle similar situations independently.`;
+First explain your reasoning process (how you approach this problem), then provide a concrete solution. The goal is both to solve the immediate problem AND teach the junior to handle similar situations independently.
+
+## Required Response Format
+Your response MUST be structured EXACTLY as follows, with these exact section headers:
+
+[Reasoning]
+<Your step-by-step thinking process. Show HOW you approach the problem: what you notice, what hypotheses you consider, why you rule some out, how you narrow down. This is the most important section for teaching.>
+
+[Answer]
+<Your final concrete solution with code/commands/configs as needed.>`;
     }
 
     return prompt;
@@ -2149,7 +2176,7 @@ For all other requests, answer independently using your own knowledge and any <l
         if (localLlmMode === "observer" && localLlmProvider) {
           mkdirSync(localTrainingDir, { recursive: true });
           const msgs = msgsResult.data;
-          const recentPairs: Array<{ instruction: string; input: string; output: string }> = [];
+          const recentPairs: Array<{ instruction: string; input: string; output: string; localOutput?: string; divergence?: number }> = [];
 
           for (let i = msgs.length - 1; i >= 1; i--) {
             if (msgs[i].info.role === "assistant" && msgs[i - 1].info.role === "user") {
@@ -2161,10 +2188,32 @@ For all other requests, answer independently using your own knowledge and any <l
               if (userText.length < 5 || assistText.length < 20) break;
               if (userText.length > 8000 || assistText.length > 16000) break;
 
+              let localOutput: string | undefined;
+              let divergence: number | undefined;
+              try {
+                const localAnswer = await Promise.race([
+                  localLlmProvider.complete(
+                    `You are a helpful AI assistant. Answer the user's question thoroughly.\n\nUser: ${userText.slice(0, 2000)}\n\nAssistant:`,
+                    { maxTokens: 2000 }
+                  ),
+                  new Promise<string>((_, rej) => setTimeout(() => rej(new Error("local llm timeout")), 60000)),
+                ]);
+                if (localAnswer && localAnswer.length > 10) {
+                  localOutput = localAnswer.slice(0, 8000);
+                  // Jaccard word-overlap: 1 - |A ∩ B| / |A ∪ B|
+                  const aWords = new Set(assistText.toLowerCase().match(/\b\w+\b/g) ?? []);
+                  const bWords = new Set(localOutput.toLowerCase().match(/\b\w+\b/g) ?? []);
+                  const inter = [...aWords].filter(w => bWords.has(w)).length;
+                  const union = new Set([...aWords, ...bWords]).size;
+                  divergence = union === 0 ? 0 : 1 - inter / union;
+                }
+              } catch {}
+
               recentPairs.push({
                 instruction: "You are a helpful AI assistant. Answer the user's question thoroughly.",
                 input: userText.slice(0, 4000),
                 output: assistText.slice(0, 8000),
+                ...(localOutput ? { localOutput, divergence } : {}),
               });
               break;
             }
