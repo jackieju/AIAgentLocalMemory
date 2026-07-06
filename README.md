@@ -379,7 +379,8 @@ The plugin implements a **growing local intelligence** system: a local LLM progr
       "autoEscalateAfter": 3                // student mode: auto-escalate after N user corrections
     },
     "training": {
-      "triggerCount": 100                   // LoRA training triggers after this many training pairs
+      "triggerCount": 100,                   // LoRA training triggers after this many training pairs
+      "cotStrategy": "thinking-tag"          // How to capture reasoning in observer mode
     }
   }
 }
@@ -406,6 +407,18 @@ User asks question → Claude answers → Plugin stores {question, answer} as tr
 - Training data stored in `~/.local/share/ai-agent-local-memory/training-pairs/pairs.jsonl`
 - No impact on response quality — server LLM handles everything
 - Ideal starting point: accumulate data before switching to student/primary mode
+
+##### Reasoning capture (cotStrategy)
+
+Plain `{Q, A}` pairs teach the local model to imitate answer style but not reasoning. To distill reasoning too, you can capture chain-of-thought:
+
+| Strategy | Behavior | User visibility | Cost |
+|---|---|---|---|
+| **`thinking-tag`** (default) | Server LLM wraps reasoning in `<thinking>...</thinking>` tags before the final answer. Both are stored as training output. | Hidden by OpenCode UI | No extra API calls |
+| **`post-rewrite`** | Original conversation runs normally. After session idle, a sub-session asks the server LLM to rewrite the reply as `[Reasoning] + [Answer]` and stores the rewrite. | User sees original reply as-is | One extra API call per Q&A pair (background) |
+| **`none`** | No reasoning capture. Store `{Q, A}` as-is. | — | Zero |
+
+Configure via `localLlm.training.cotStrategy`. Default: `thinking-tag`.
 
 #### Student Mode
 

@@ -34,11 +34,12 @@ interface PluginConfig {
     apiKey?: string;
     mode: "observer" | "student" | "primary";
     confidence?: {
-      userThreshold?: number;   // user-configured confidence threshold (0-1, default 0.5)
-      autoEscalateAfter?: number; // auto-escalate after N consecutive user dissatisfactions (default 3)
+      userThreshold?: number;
+      autoEscalateAfter?: number;
     };
     training?: {
-      triggerCount?: number;    // LoRA training trigger threshold (default: 100 for observer, 50 for student/primary)
+      triggerCount?: number;
+      cotStrategy?: "thinking-tag" | "post-rewrite" | "none";
     };
   };
 }
@@ -189,6 +190,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const confidenceThreshold = pluginConfig.localLlm?.confidence?.userThreshold ?? 0.5;
   const autoEscalateAfter = pluginConfig.localLlm?.confidence?.autoEscalateAfter ?? 3;
   const trainingTriggerCount = pluginConfig.localLlm?.training?.triggerCount ?? (localLlmMode === "observer" ? 100 : 50);
+  const cotStrategy = pluginConfig.localLlm?.training?.cotStrategy ?? "thinking-tag";
 
   try {
     await engine.init({ storage, projectId: "global", episodesDir, llm: llmProvider, embedding: embeddingProvider });
@@ -2087,6 +2089,18 @@ You are a LOCAL AI agent in PRIMARY mode. You are fully autonomous.
 Only call neural_ask_server when the user explicitly says "问大模型", "问一下大模型", "ask the server model", or similar.
 For all other requests, answer independently using your own knowledge and any <learned-experiences> above.
 </local-agent-mode>`);
+        } else if (localLlmMode === "observer" && cotStrategy === "thinking-tag") {
+          output.system.push(`<cot-capture>
+Before your final response, write your step-by-step reasoning inside <thinking>...</thinking> tags. The user's UI hides these tags — they exist purely so a local model can learn your reasoning process.
+
+Structure every non-trivial reply as:
+<thinking>
+Your step-by-step reasoning: what you notice, hypotheses, why you rule some out, how you narrow down.
+</thinking>
+<your normal final answer>
+
+Skip the thinking block for pure greetings or one-word replies.
+</cot-capture>`);
         }
       } catch {}
     },
@@ -2209,10 +2223,53 @@ For all other requests, answer independently using your own knowledge and any <l
                 }
               } catch {}
 
+              let outputForTraining = assistText.slice(0, 8000);
+
+              if (cotStrategy === "post-rewrite") {
+                try {
+                  const child = await client.session.create({});
+                  if (child.data) {
+                    const rewritePrompt = `Rewrite the assistant reply below in structured [Reasoning] + [Answer] format so a local model can learn the reasoning process.
+
+USER QUESTION:
+${userText.slice(0, 2000)}
+
+ORIGINAL ASSISTANT REPLY:
+${assistText.slice(0, 6000)}
+
+Return ONLY the rewritten version, no preamble. Format:
+[Reasoning]
+<step-by-step thinking that led to this answer>
+
+[Answer]
+<the same final answer, reformatted>`;
+
+                    await client.session.promptAsync({
+                      path: { id: child.data.id },
+                      body: { parts: [{ type: "text", text: rewritePrompt }] },
+                    });
+
+                    await new Promise(r => setTimeout(r, 20000));
+
+                    const childMsgs = await client.session.messages({ path: { id: child.data.id }, query: { limit: 3 } });
+                    if (childMsgs.data) {
+                      for (const m of childMsgs.data) {
+                        if (m.info.role !== "assistant") continue;
+                        const t = (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+                        if (t.includes("[Reasoning]") && t.includes("[Answer]")) {
+                          outputForTraining = t.slice(0, 12000);
+                          break;
+                        }
+                      }
+                    }
+                  }
+                } catch {}
+              }
+
               recentPairs.push({
                 instruction: "You are a helpful AI assistant. Answer the user's question thoroughly.",
                 input: userText.slice(0, 4000),
-                output: assistText.slice(0, 8000),
+                output: outputForTraining,
                 ...(localOutput ? { localOutput, divergence } : {}),
               });
               break;
