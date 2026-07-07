@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
@@ -655,6 +655,32 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
       } catch (err) {
         console.error("[ai-agent-local-memory] shutdown failed:", err);
       }
+    },
+
+    "chat.message": async (input: any, output: any) => {
+      try {
+        if (!process.env.NEURAL_REPLAY_ORIG_SESSION_ID) return;
+        const parts = output?.parts ?? [];
+        const text = parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n").trim();
+        if (!text || text.length < 5) return;
+        (globalThis as any).__neuralReplayLastUserMsg = { text, ts: Date.now() };
+      } catch {}
+    },
+
+    "tool.execute.after": async (input: any, output: any) => {
+      try {
+        if (!process.env.NEURAL_REPLAY_ORIG_SESSION_ID) return;
+        mkdirSync(localTrainingDir, { recursive: true });
+        const outStr = typeof output?.output === "string" ? output.output.slice(0, 6000) : JSON.stringify(output?.output ?? "").slice(0, 6000);
+        const lastUser = (globalThis as any).__neuralReplayLastUserMsg?.text?.slice(0, 3000) ?? "";
+        const sample = {
+          instruction: "You are an autonomous coding agent. Given the current context and user request, decide the next tool call.",
+          input: `[User request]\n${lastUser}\n\n[Next tool decision]`,
+          output: JSON.stringify({ tool: input.tool, args: input.args }, null, 2),
+          tool_result_preview: outStr.slice(0, 500),
+        };
+        appendFileSync(join(localTrainingDir, "tool-calls.jsonl"), JSON.stringify(sample) + "\n");
+      } catch {}
     },
 
     // Replay-mode tool interception. When env NEURAL_REPLAY_ORIG_SESSION_ID is set,
