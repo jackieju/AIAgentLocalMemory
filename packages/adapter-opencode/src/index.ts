@@ -673,11 +673,30 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
         mkdirSync(localTrainingDir, { recursive: true });
         const outStr = typeof output?.output === "string" ? output.output.slice(0, 6000) : JSON.stringify(output?.output ?? "").slice(0, 6000);
         const lastUser = (globalThis as any).__neuralReplayLastUserMsg?.text?.slice(0, 3000) ?? "";
-        const sample = {
-          instruction: "You are an autonomous coding agent. Given the current context and user request, decide the next tool call.",
+        let thinking = "";
+        try {
+          const sid = input?.sessionID;
+          if (sid) {
+            const msgsResult = await client.session.messages({ path: { id: sid }, query: { limit: 5 } });
+            const msgs = (msgsResult as any)?.data ?? [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m?.info?.role !== "assistant") continue;
+              const parts = m.parts ?? [];
+              const txt = parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n");
+              const match = txt.match(/<thinking>([\s\S]*?)<\/thinking>/i);
+              if (match) { thinking = match[1].trim().slice(0, 3000); break; }
+            }
+          }
+        } catch {}
+        const sample: any = {
+          instruction: "You are an autonomous coding agent. Given the user request, think step-by-step then decide the next tool call.",
           input: `[User request]\n${lastUser}\n\n[Next tool decision]`,
-          output: JSON.stringify({ tool: input.tool, args: input.args }, null, 2),
+          output: thinking
+            ? `<thinking>\n${thinking}\n</thinking>\n${JSON.stringify({ tool: input.tool, args: input.args }, null, 2)}`
+            : JSON.stringify({ tool: input.tool, args: input.args }, null, 2),
           tool_result_preview: outStr.slice(0, 500),
+          has_cot: !!thinking,
         };
         appendFileSync(join(localTrainingDir, "tool-calls.jsonl"), JSON.stringify(sample) + "\n");
       } catch {}
@@ -2247,17 +2266,17 @@ You are a LOCAL AI agent in PRIMARY mode. You are fully autonomous.
 Only call neural_ask_server when the user explicitly says "问大模型", "问一下大模型", "ask the server model", or similar.
 For all other requests, answer independently using your own knowledge and any <learned-experiences> above.
 </local-agent-mode>`);
-        } else if (localLlmMode === "observer" && cotStrategy === "thinking-tag") {
+        } else if (process.env.NEURAL_REPLAY_ORIG_SESSION_ID || (localLlmMode === "observer" && cotStrategy === "thinking-tag")) {
           output.system.push(`<cot-capture>
-Before your final response, write your step-by-step reasoning inside <thinking>...</thinking> tags. The user's UI hides these tags — they exist purely so a local model can learn your reasoning process.
+Before every tool call and before your final response, write step-by-step reasoning inside <thinking>...</thinking> tags. This is REQUIRED for training data harvest.
 
 Structure every non-trivial reply as:
 <thinking>
-Your step-by-step reasoning: what you notice, hypotheses, why you rule some out, how you narrow down.
+Step-by-step reasoning: what the user is asking, what you notice, hypotheses, why you rule some out, how you narrow down to the next action or answer.
 </thinking>
-<your normal final answer>
+<your tool call or final answer>
 
-Skip the thinking block for pure greetings or one-word replies.
+Skip the thinking block ONLY for pure greetings or one-word replies. For any real task, ALWAYS include reasoning first.
 </cot-capture>`);
         }
       } catch {}
