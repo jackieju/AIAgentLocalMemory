@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 const DATA_ROOT = join(homedir(), ".local", "share", "ai-agent-local-memory");
 const GRAPH_DB_PATH = join(DATA_ROOT, "graph.db");
 const PAIRS_JSONL_PATH = join(DATA_ROOT, "training-pairs", "pairs.jsonl");
+const TOOL_CALLS_JSONL_PATH = join(DATA_ROOT, "training-pairs", "tool-calls.jsonl");
 const OUTPUT_DIR = resolve(import.meta.dir, "training-data");
 
 const DIVERGENCE_THRESHOLD = Number(process.env.DIVERGENCE_MIN ?? "0.3");
@@ -17,7 +18,7 @@ interface TrainingExample {
   instruction: string;
   input: string;
   output: string;
-  source: "experience" | "observer";
+  source: "experience" | "observer" | "tool-call";
   divergence?: number;
   priority: number;
 }
@@ -95,7 +96,7 @@ function loadFromPairsJsonl(): TrainingExample[] {
 function dedupe(items: TrainingExample[]): TrainingExample[] {
   const seen = new Map<string, TrainingExample>();
   for (const item of items) {
-    const key = item.input.slice(0, 200).toLowerCase().replace(/\s+/g, " ").trim();
+    const key = (item.input + "→" + item.output).slice(0, 800).toLowerCase().replace(/\s+/g, " ").trim();
     const existing = seen.get(key);
     if (!existing || item.priority > existing.priority) {
       seen.set(key, item);
@@ -104,14 +105,35 @@ function dedupe(items: TrainingExample[]): TrainingExample[] {
   return [...seen.values()];
 }
 
+function loadFromToolCalls(): TrainingExample[] {
+  if (!existsSync(TOOL_CALLS_JSONL_PATH)) return [];
+  const lines = readFileSync(TOOL_CALLS_JSONL_PATH, "utf8").split("\n").filter(Boolean);
+  const out: TrainingExample[] = [];
+  for (const line of lines) {
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (!obj.input || !obj.output) continue;
+    out.push({
+      instruction: obj.instruction || "You are an autonomous coding agent. Given the current context and user request, decide the next tool call.",
+      input: String(obj.input).slice(0, 4000),
+      output: String(obj.output).slice(0, 8000),
+      source: "tool-call",
+      priority: 0.7,
+    });
+  }
+  return out;
+}
+
 function main() {
   const graphData = loadFromGraphDb();
   const pairsData = loadFromPairsJsonl();
+  const toolCallsData = loadFromToolCalls();
 
   console.log(`Loaded ${graphData.length} experience nodes (graph.db)`);
   console.log(`Loaded ${pairsData.length} observer pairs (divergence >= ${DIVERGENCE_THRESHOLD})`);
+  console.log(`Loaded ${toolCallsData.length} tool-call samples (replay-history)`);
 
-  const merged = dedupe([...graphData, ...pairsData]);
+  const merged = dedupe([...graphData, ...pairsData, ...toolCallsData]);
   merged.sort((a, b) => b.priority - a.priority);
 
   console.log(`After dedup: ${merged.length} unique examples`);
