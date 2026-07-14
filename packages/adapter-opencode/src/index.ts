@@ -579,6 +579,11 @@ JSON:`;
   let lastSystemHash = "";
   let lastCompressTime = 0;
   let currentOpenCodeSessionId = "";
+  // Guards against concurrent compress runs for the same session — critical to keep
+  // transform non-blocking on sessions with large uncovered gaps. Mirrors magic-context's
+  // compartmentInProgress flag: 80-95% pct triggers a background compress; further transform
+  // passes see the flag and skip re-triggering until this run resolves.
+  const compressInFlight = new Set<string>();
 
   try {
     const row = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'reasoning_watermark'`).get() as { value: string } | undefined;
@@ -2028,31 +2033,38 @@ List the angles in 1-2 sentences each. Be concise.`;
           });
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
-            writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history...`);
-            try {
-              const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
-              const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
-              if (result) {
-                compartmentStore.save(result);
-                lastCompressTime = Date.now();
-                try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
-              }
-            } catch {}
+            writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history (background)...`);
+            if (!compressInFlight.has(openCodeSessionId)) {
+              compressInFlight.add(openCodeSessionId);
+              (async () => {
+                try {
+                  const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
+                  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
+                  const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
+                  if (result) {
+                    compartmentStore.save(result);
+                    lastCompressTime = Date.now();
+                    try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+                  }
+                } catch {} finally { compressInFlight.delete(openCodeSessionId); }
+              })();
+            }
           } else if (usagePct >= ABORT_PCT) {
-            try {
-              await client.session.abort?.({ path: { id: currentOpenCodeSessionId || sessionId } });
-            } catch {}
-            try {
-              const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-              const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
-              const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
-              if (result) {
-                compartmentStore.save(result);
-                lastCompressTime = Date.now();
-                try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
-              }
-            } catch {}
+            if (!compressInFlight.has(openCodeSessionId)) {
+              compressInFlight.add(openCodeSessionId);
+              (async () => {
+                try {
+                  const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
+                  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
+                  const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
+                  if (result) {
+                    compartmentStore.save(result);
+                    lastCompressTime = Date.now();
+                    try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+                  }
+                } catch {} finally { compressInFlight.delete(openCodeSessionId); }
+              })();
+            }
           } else {
             (async () => {
               try {
