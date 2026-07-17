@@ -2066,9 +2066,21 @@ List the angles in 1-2 sentences each. Be concise.`;
               })();
             }
           } else {
-            (async () => {
+            if (compressInFlight.has(openCodeSessionId)) {
+              // one background historian is already running for this session — don't spawn another;
+              // magic-context serializes historian to one at a time via compartmentInProgress flag.
+              // extra concurrent historians pile up in opencode's single event loop, delaying user turns.
+            } else {
+              compressInFlight.add(openCodeSessionId);
+              (async () => {
               try {
-                const childSession = await client.session.create({});
+                // Use opencode's built-in historian agent to keep sub-session light.
+                // Without body.agent="historian" opencode inherits parent's full-weight agent
+                // (Sisyphus - Ultraworker) which does long reasoning + tool loops, taking 3-5 min
+                // per historian pass and blocking the parent's next transform.
+                const childSession = await client.session.create({
+                  body: { title: "neural-compartment" },
+                } as any);
                 if (!childSession.data) return;
                 const childId = childSession.data.id;
 
@@ -2089,8 +2101,8 @@ JSON:`;
 
                 await client.session.promptAsync({
                   path: { id: childId },
-                  body: { parts: [{ type: "text", text: historianPrompt }] },
-                });
+                  body: { agent: "historian", parts: [{ type: "text", text: historianPrompt }] },
+                } as any);
 
                 await new Promise(r => setTimeout(r, 15000));
 
@@ -2138,8 +2150,9 @@ JSON:`;
                 try { await client.session.delete({ path: { id: childId } }); } catch {}
               } catch {
                 historianFailureCount++;
-              }
+              } finally { compressInFlight.delete(openCodeSessionId); }
             })();
+            }
           }
         }
 
