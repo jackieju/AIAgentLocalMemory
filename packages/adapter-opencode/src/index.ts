@@ -662,6 +662,37 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
       }
     },
 
+    config: async (config: any) => {
+      const agentCfg = { ...(config.agent ?? {}) };
+      if (!agentCfg["neural-historian"]) {
+        agentCfg["neural-historian"] = {
+          prompt: "You compress conversation history. Output STRICT JSON only: {\"p1\":\"...\",\"p2\":\"...\",\"p3\":\"...\"}. p1: paragraph <=150 tokens capturing goals, decisions, files/symbols, errors, current state. p2: single sentence <=25 tokens. p3: title <=8 tokens. Use same language as the conversation. Preserve concrete identifiers verbatim.",
+          mode: "subagent",
+          hidden: true,
+          maxSteps: 3,
+          steps: 3,
+          permission: {
+            bash: "deny",
+            edit: "deny",
+            write: "deny",
+            webfetch: "deny",
+          },
+          tools: {
+            bash: false,
+            edit: false,
+            write: false,
+            read: false,
+            grep: false,
+            glob: false,
+            webfetch: false,
+            todowrite: false,
+            task: false,
+          },
+        };
+        config.agent = agentCfg;
+      }
+    },
+
     "chat.message": async (input: any, output: any) => {
       try {
         if (!process.env.NEURAL_REPLAY_ORIG_SESSION_ID) return;
@@ -2101,7 +2132,7 @@ JSON:`;
 
                 await client.session.promptAsync({
                   path: { id: childId },
-                  body: { agent: "historian", parts: [{ type: "text", text: historianPrompt }] },
+                  body: { agent: "neural-historian", parts: [{ type: "text", text: historianPrompt }] },
                 } as any);
 
                 await new Promise(r => setTimeout(r, 15000));
