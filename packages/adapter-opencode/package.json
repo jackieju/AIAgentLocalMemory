@@ -10,7 +10,7 @@
       "import": "./dist/index.js"
     },
     "./tui": {
-      "import": "./src/tui/index.tsx"
+      "import": "./src/tui/entry.mjs"
     }
   },
   "oc-plugin": ["server", "tui"],

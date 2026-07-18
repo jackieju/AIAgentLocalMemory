@@ -1922,7 +1922,7 @@ List the angles in 1-2 sentences each. Be concise.`;
               if (part.type === "tool" && part.state?.status === "error" && typeof part.state.error === "string" && part.state.error.length > 100) {
                 part.state.error = part.state.error.slice(0, 100) + "... [truncated]";
               }
-              if (part.type === "text" || part.type === "tool_result") {
+              if (part.type === "tool_result") {
                 const text = part.text ?? "";
                 if (text.length > 300) {
                   const toolName = msg.info?.toolName ?? msg.info?.tool ?? "";
