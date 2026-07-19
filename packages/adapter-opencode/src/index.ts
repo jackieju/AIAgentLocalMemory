@@ -1697,19 +1697,7 @@ List the angles in 1-2 sentences each. Be concise.`;
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
         const realUsage = getContextUsage(openCodeSessionId);
-        const usagePct = realUsage.percentage > 0
-          ? realUsage.percentage
-          : (() => {
-              let totalTokens = 0;
-              for (const msg of messages) {
-                totalTokens += 10;
-                for (const part of (msg.parts ?? [])) {
-                  const text = (part as any).text ?? "";
-                  if (text) totalTokens += estimateTokens(text);
-                }
-              }
-              return (totalTokens / contextLimit) * 100;
-            })();
+        const usagePct = realUsage.percentage;
 
         const lastAssistantModel = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
