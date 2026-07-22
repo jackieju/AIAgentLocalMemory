@@ -28,7 +28,11 @@
     "@opencode-ai/plugin": ">=1.15.0"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.15.13"
+    "@babel/core": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
+    "@opencode-ai/plugin": "^1.15.13",
+    "babel-plugin-module-resolver": "^5.0.3",
+    "babel-preset-solid": "^1.9.12"
   },
   "files": ["dist", "README.md"]
 }

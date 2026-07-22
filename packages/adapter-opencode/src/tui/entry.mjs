@@ -14,10 +14,11 @@ try {
     console.error("[ai-agent-local-memory] TUI runtime probe failed", error);
     throw error;
   }
+  mod = await import("./index.tsx");
 }
 
 if (!mod) {
-  mod = await import("./index.tsx");
+  mod = await import("../tui-compiled/index.tsx");
 }
 
 export default mod.default;
