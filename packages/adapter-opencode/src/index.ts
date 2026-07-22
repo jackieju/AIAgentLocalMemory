@@ -1725,6 +1725,21 @@ List the angles in 1-2 sentences each. Be concise.`;
         }
 
         const isMidTurn = (() => {
+          // Mirror magic-context: derive mid-turn from the latest assistant's finish
+          // reason in OpenCode's DB, not from the transform messages array. The array's
+          // last entry is often the just-arrived user message, which made the old
+          // array-tail check misreport mid-turn as false and mishandle rapid double-sends.
+          if (openCodeDb) {
+            try {
+              const row = openCodeDb.prepare(
+                `SELECT json_extract(data, '$.finish') AS finish
+                 FROM opencode.message
+                 WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
+                 ORDER BY time_created DESC LIMIT 1`
+              ).get(openCodeSessionId) as { finish: string | null } | undefined;
+              if (row && row.finish === "tool-calls") return true;
+            } catch {}
+          }
           if (messages.length === 0) return false;
           const last = messages[messages.length - 1];
           return last.info?.role === "assistant" && (last.parts ?? []).some((p: any) => p.type === "tool_call");
@@ -2230,6 +2245,14 @@ JSON:`;
           output.messages.length = 0;
           output.messages.push({ info: { role: "user" }, parts: [{ type: "text", text: "." }] });
         }
+        try {
+          const roleSeq = output.messages.slice(-6).map((m: any) => m.info?.role ?? "?").join(",");
+          const lastMsg = output.messages[output.messages.length - 1];
+          const lastText = (lastMsg?.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("").slice(0, 60);
+          writeFileSync("/tmp/neural-echo-diag.log",
+            `${new Date().toISOString()} out=${output.messages.length} tailRoles=[${roleSeq}] lastRole=${lastMsg?.info?.role} hadContent=${hasContent} lastText=${JSON.stringify(lastText)}\n`,
+            { flag: "a" });
+        } catch {}
       }
     },
 
