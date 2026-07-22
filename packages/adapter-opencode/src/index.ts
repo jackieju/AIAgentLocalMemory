@@ -370,6 +370,19 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     }
   }
 
+  // Keep large binaries and full-session JSONL out of git history — committing them
+  // every sync grew .git to 1.6G (each 46MB session export stored as a fresh blob per
+  // commit). Written unconditionally so existing repos get the ignore rules too.
+  if (pluginConfig.syncRepo) {
+    try {
+      const gitignorePath = join(syncDir, ".gitignore");
+      const wanted = "session-backup/\n*.db.gz\n*.db\nopencode-sessions/*.jsonl\n";
+      if (!existsSync(gitignorePath) || readFileSync(gitignorePath, "utf-8") !== wanted) {
+        writeFileSync(gitignorePath, wanted);
+      }
+    } catch {}
+  }
+
   let syncTimer: ReturnType<typeof setInterval> | null = null;
   let dreamerTimer: ReturnType<typeof setInterval> | null = null;
   let reconciliationTimer: ReturnType<typeof setInterval> | null = null;
