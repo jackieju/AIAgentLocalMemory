@@ -1786,6 +1786,13 @@ List the angles in 1-2 sentences each. Be concise.`;
         const FORCE_COMPARTMENT_PCT = 80;
         const TARGET_USAGE_PCT = 0.55;
         const ABORT_PCT = 95;
+        // Our local char/4 + CJK estimator under-counts what Anthropic actually tokenizes
+        // for the conversation bucket — tool_result blobs (JSON/base64/logs/CJK) measure
+        // ~3x larger on the wire. opencode calibrates system/tools buckets (1.51/1.57) but
+        // has NO conversation ratio, so our tail budget passed a 67K-estimate tail that
+        // billed as 214K → "Input is too long". Apply a conversation calibration factor so
+        // the budget reflects real wire tokens. Conservative 3.0 for opus-class models.
+        const CONVERSATION_TOKEN_RATIO = 3.0;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
@@ -1888,16 +1895,12 @@ List the angles in 1-2 sentences each. Be concise.`;
             for (const part of (messages[i].parts ?? [])) {
               const text = partBillableText(part);
               if (text) {
-                // Estimate on a capped sample for speed, then scale back up to the full
-                // length. Previously we only counted the first 1000 chars WITHOUT scaling,
-                // which under-counted large messages (e.g. 7000-char tool outputs) ~7x,
-                // so the budget loop kept far more than TARGET_USAGE_PCT and the prompt
-                // blew past the model context limit ("Input is too long").
                 const sampleLen = Math.min(text.length, 1000);
                 const sampleTokens = estimateTokens(text.slice(0, sampleLen));
                 msgTokens += sampleLen > 0 ? Math.ceil(sampleTokens * (text.length / sampleLen)) : 0;
               }
             }
+            msgTokens = Math.ceil(msgTokens * CONVERSATION_TOKEN_RATIO);
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
@@ -2155,7 +2158,7 @@ List the angles in 1-2 sentences each. Be concise.`;
             for (const m of messages) {
               for (const p of (m.parts ?? [])) {
                 const t = partBillableText(p);
-                if (t) { const sl = Math.min(t.length, 1000); tailEstTokens += Math.ceil(estimateTokens(t.slice(0, sl)) * (t.length / Math.max(sl, 1))); }
+                if (t) { const sl = Math.min(t.length, 1000); tailEstTokens += Math.ceil(estimateTokens(t.slice(0, sl)) * (t.length / Math.max(sl, 1)) * CONVERSATION_TOKEN_RATIO); }
               }
             }
             writeFileSync(`/tmp/neural-rendered-${openCodeSessionId}.json`, JSON.stringify({
