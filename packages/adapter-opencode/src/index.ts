@@ -1732,6 +1732,16 @@ List the angles in 1-2 sentences each. Be concise.`;
         // the true cause of "Input is too long" at a falsely-low reported usage.
         const partBillableText = (part: any): string => {
           if (typeof part?.text === "string" && part.text) return part.text;
+          // tool_result parts in the transform array carry their payload under `content`
+          // (shape {type, tool_use_id, content}); tool_use parts carry `input`. DB-shaped
+          // parts use state.input/state.output. Cover all three or tool payloads score 0.
+          if (typeof part?.content === "string" && part.content) return part.content;
+          if (part?.content !== undefined && part?.content !== null && typeof part.content !== "string") {
+            try { return JSON.stringify(part.content); } catch { /* fall through */ }
+          }
+          if (part?.input !== undefined) {
+            return typeof part.input === "string" ? part.input : (() => { try { return JSON.stringify(part.input); } catch { return ""; } })();
+          }
           const st = part?.state;
           if (st && typeof st === "object") {
             let s = "";
@@ -2131,9 +2141,31 @@ List the angles in 1-2 sentences each. Be concise.`;
             }
           }
           try {
-            writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
+            const toolPartSample = (() => {
+              for (const m of messages) {
+                for (const p of (m.parts ?? [])) {
+                  if ((p as any).type === "tool" || (p as any).type === "tool_result" || (p as any).type === "tool_call") {
+                    return { keys: Object.keys(p as any), billableLen: partBillableText(p).length, raw: JSON.stringify(p).slice(0, 300) };
+                  }
+                }
+              }
+              return null;
+            })();
+            let tailEstTokens = 0;
+            for (const m of messages) {
+              for (const p of (m.parts ?? [])) {
+                const t = partBillableText(p);
+                if (t) { const sl = Math.min(t.length, 1000); tailEstTokens += Math.ceil(estimateTokens(t.slice(0, sl)) * (t.length / Math.max(sl, 1))); }
+              }
+            }
+            writeFileSync(`/tmp/neural-rendered-${openCodeSessionId}.json`, JSON.stringify({
               ts: Date.now(),
               renderedCount: rendered.length,
+              inputMsgCount: messages.length,
+              tailEstTokens,
+              tailBudgetTokens,
+              contextLimit,
+              toolPartSample,
               msgIdSample: messages.slice(0, 3).map((m: any) => m.info?.id ?? null),
               msgIdCoverage: messages.filter((m: any) => m.info?.id).length + "/" + messages.length,
               firstMsg: rendered[0] ? { role: rendered[0].info?.role, partsCount: rendered[0].parts?.length, partTypes: (rendered[0].parts ?? []).map((p: any) => p.type) } : null,
