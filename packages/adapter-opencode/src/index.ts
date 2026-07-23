@@ -209,9 +209,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     const db = rawStorage.getDb();
     db.exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`);
     const v = db.prepare(`SELECT value FROM kv WHERE key = 'compartments_schema'`).get() as { value: string } | undefined;
-    if (v?.value !== "2") {
+    if (v?.value !== "3") {
       compartmentStore.dropAndRecreate();
-      db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('compartments_schema', '2')`).run();
+      db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('compartments_schema', '3')`).run();
     }
   } catch {}
 
@@ -357,13 +357,13 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           if (uncovered.length < 6) return;
           const chunkSize = Math.min(64, uncovered.length - 20);
           if (chunkSize < 6) return;
-          const windowMsgs = uncovered.slice(0, chunkSize).map((m: any, idx: number) => {
+          const windowMsgs = uncovered.slice(0, chunkSize).map((m: any) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
             const mid = typeof m.info?.id === "string" ? m.info.id : "";
-            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : startIdx + idx;
+            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
             return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
-          });
+          }).filter((m: { ord: number }) => m.ord >= 0);
           const result = await (historian as any).compress(sid, windowMsgs);
           if (result) compartmentStore.save(result);
           writeFileSync("/tmp/neural-init-compress.log", JSON.stringify({ ts: Date.now(), pct, chunkSize, success: !!result }));
@@ -2147,13 +2147,15 @@ List the angles in 1-2 sentences each. Be concise.`;
           const dbList = getSessionMessageList(openCodeSessionId);
           const dbOrdById = new Map<string, number>();
           for (const r of dbList) dbOrdById.set(r.id, r.ord);
-          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
-            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            const mid = typeof m.info?.id === "string" ? m.info.id : "";
-            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : tailStartIdx + idx;
-            return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
-          });
+          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize)
+            .map((m: any) => {
+              const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
+              const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
+              const mid = typeof m.info?.id === "string" ? m.info.id : "";
+              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
+              return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
+            })
+            .filter((m: { ord: number }) => m.ord >= 0);
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history (background)...`);
@@ -2471,13 +2473,13 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
               startIdx = found >= 0 ? found + 1 : 0;
             }
             const uncovered = messages.slice(startIdx, startIdx + 12);
-            const windowMsgs = uncovered.map((m: any, idx: number) => {
+            const windowMsgs = uncovered.map((m: any) => {
               const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
               const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
               const mid = typeof m.info?.id === "string" ? m.info.id : "";
-              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : startIdx + idx;
+              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
               return { role: m.info.role as string, content, ord, id: mid };
-            });
+            }).filter((m: { ord: number }) => m.ord >= 0);
             if (windowMsgs.length >= 6) {
               const result = await (historian as any).compress(sessionId, windowMsgs);
               if (result) {

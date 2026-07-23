@@ -97,13 +97,24 @@ export class Historian {
       const parsed = JSON.parse(jsonMatch[0]);
       if (!parsed.p1 || !parsed.p2 || !parsed.p3) return null;
 
+      // Derive boundaries from the min/max ordinal in the window rather than
+      // window[0]/window[last]. Callers may hand us messages whose `ord` is not
+      // monotonic (mixed DB-ordinal and fallback values), which previously
+      // produced startOrd > endOrd and a corrupt compartment range.
+      let startMsg = window[0];
+      let endMsg = window[0];
+      for (const m of window) {
+        if (m.ord < startMsg.ord) startMsg = m;
+        if (m.ord > endMsg.ord) endMsg = m;
+      }
+
       return {
         id: 0,
         sessionId,
-        startOrd: window[0].ord,
-        endOrd: window[window.length - 1].ord,
-        startMessageId: window[0].id ?? "",
-        endMessageId: window[window.length - 1].id ?? "",
+        startOrd: startMsg.ord,
+        endOrd: endMsg.ord,
+        startMessageId: startMsg.id ?? "",
+        endMessageId: endMsg.id ?? "",
         p1: String(parsed.p1),
         p2: String(parsed.p2),
         p3: String(parsed.p3),
