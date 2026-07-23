@@ -1725,6 +1725,23 @@ List the angles in 1-2 sentences each. Be concise.`;
           return Math.ceil(text.length * avgTokensPerChar);
         };
 
+        // A part's billable size is NOT just part.text. tool parts carry their command
+        // and output under state.input/state.output (avg 42KB, up to 2MB), which the
+        // model is actually charged for. Counting only part.text estimated tool parts as
+        // ~0, so the tail budget kept 500+ messages whose real size was 200K+ tokens —
+        // the true cause of "Input is too long" at a falsely-low reported usage.
+        const partBillableText = (part: any): string => {
+          if (typeof part?.text === "string" && part.text) return part.text;
+          const st = part?.state;
+          if (st && typeof st === "object") {
+            let s = "";
+            if (st.input !== undefined) s += typeof st.input === "string" ? st.input : JSON.stringify(st.input);
+            if (st.output !== undefined) s += typeof st.output === "string" ? st.output : JSON.stringify(st.output);
+            return s;
+          }
+          return "";
+        };
+
         const FILLER_WORDS = /\b(basically|actually|really|just|very|quite|pretty|somewhat|certainly|definitely|obviously|clearly|simply|literally|honestly|frankly|anyway|so|well|now|then|also|still|already|even)\b/gi;
         const HEDGING = /\b(I think|I believe|I would say|it seems like|it appears that|in my opinion|from my perspective|if you will|sort of|kind of|more or less|to be honest|at the end of the day)\b/gi;
         const PLEASANTRIES = /\b(please|thanks|thank you|kindly|if possible)\b/gi;
@@ -1859,7 +1876,7 @@ List the angles in 1-2 sentences each. Be concise.`;
           for (let i = messages.length - 1; i >= floor; i--) {
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
-              const text = (part as any).text ?? "";
+              const text = partBillableText(part);
               if (text) {
                 // Estimate on a capped sample for speed, then scale back up to the full
                 // length. Previously we only counted the first 1000 chars WITHOUT scaling,
