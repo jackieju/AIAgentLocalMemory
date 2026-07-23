@@ -1980,6 +1980,26 @@ List the angles in 1-2 sentences each. Be concise.`;
           }
         }
 
+        // Truncate oversized tool outputs in the non-protected tail. opencode's wire
+        // builder embeds part.state.output verbatim (a single tool result can be 2MB),
+        // and mid-turn we don't recompress — so one big tool result mid-conversation
+        // pushed the prompt past the model limit ("replied a bit, then Input too long").
+        // Mirror magic-context's sentinel approach: overwrite state.output/content with
+        // a bounded stub in the non-protected region.
+        const TOOL_OUTPUT_MAX_CHARS = 4000;
+        const toolTruncFloor = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
+        for (let i = 0; i < toolTruncFloor; i++) {
+          for (const part of (tail[i].parts ?? [])) {
+            const st = (part as any).state;
+            if (st && typeof st.output === "string" && st.output.length > TOOL_OUTPUT_MAX_CHARS) {
+              st.output = st.output.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n…[tool output truncated for context]";
+            }
+            if (typeof (part as any).content === "string" && (part as any).content.length > TOOL_OUTPUT_MAX_CHARS) {
+              (part as any).content = (part as any).content.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n…[tool output truncated for context]";
+            }
+          }
+        }
+
         let prevRole = "";
         for (let i = 0; i < tail.length; i++) {
           const msg = tail[i];
