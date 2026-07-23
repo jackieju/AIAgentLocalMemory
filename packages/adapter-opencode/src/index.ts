@@ -201,6 +201,20 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   const compartmentStore = new CompartmentStore(rawStorage.getDb());
 
+  // One-time migration: compartments created before schema 2 stored transform-array
+  // indices as ordinals (no messageId anchor), which misaligned across passes. They
+  // can't be salvaged, so drop them once; sessions re-compress from scratch and episode
+  // memories in the graph are unaffected.
+  try {
+    const db = rawStorage.getDb();
+    db.exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`);
+    const v = db.prepare(`SELECT value FROM kv WHERE key = 'compartments_schema'`).get() as { value: string } | undefined;
+    if (v?.value !== "2") {
+      compartmentStore.dropAndRecreate();
+      db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('compartments_schema', '2')`).run();
+    }
+  } catch {}
+
   let openCodeDb: any = null;
   try {
     const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
@@ -231,6 +245,28 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
       return { percentage: (row.prompt / contextLimit) * 100, inputTokens: row.prompt };
     } catch { return { percentage: 0, inputTokens: 0 }; }
+  }
+
+  function getSessionMessageList(sid: string): Array<{ id: string; role: string; ord: number }> {
+    if (!openCodeDb) return [];
+    try {
+      const rows = openCodeDb.prepare(`
+        SELECT id, json_extract(data, '$.role') AS role,
+               json_extract(data, '$.summary') AS summary,
+               json_extract(data, '$.finish') AS finish
+        FROM opencode.message
+        WHERE session_id = ? AND data IS NOT NULL
+        ORDER BY time_created ASC, id ASC
+      `).all(sid) as Array<{ id: string; role: string; summary: unknown; finish: string | null }>;
+      const out: Array<{ id: string; role: string; ord: number }> = [];
+      let ord = 0;
+      for (const r of rows) {
+        if (r.summary === true || r.summary === 1) continue;
+        ord++;
+        out.push({ id: r.id, role: String(r.role ?? "user"), ord });
+      }
+      return out;
+    } catch { return []; }
   }
 
   const historianModels = ["claude-sonnet-4-6", "gpt-4.1-mini", "gpt-5-mini"];
@@ -304,19 +340,31 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
         const pct = (row.prompt / contextLimit) * 100;
         if (pct >= 90) {
-          const maxOrd = compartmentStore.getMaxOrd(sessionId);
+          const comps = compartmentStore.getForSession(sid);
+          const lastEndMid = comps.length > 0 ? comps[comps.length - 1].endMessageId : "";
           const msgsResult = await client.session.messages({ path: { id: sid }, query: { limit: 100 } });
           if (!msgsResult.data) return;
-          const uncovered = msgsResult.data.slice(maxOrd + 1);
+          const dbList = getSessionMessageList(sid);
+          const dbOrdById = new Map<string, number>();
+          for (const r of dbList) dbOrdById.set(r.id, r.ord);
+          const arr = msgsResult.data;
+          let startIdx = 0;
+          if (lastEndMid) {
+            const found = arr.findIndex((m: any) => m.info?.id === lastEndMid);
+            startIdx = found >= 0 ? found + 1 : 0;
+          }
+          const uncovered = arr.slice(startIdx);
           if (uncovered.length < 6) return;
           const chunkSize = Math.min(64, uncovered.length - 20);
           if (chunkSize < 6) return;
           const windowMsgs = uncovered.slice(0, chunkSize).map((m: any, idx: number) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: (m.info?.role ?? "user") as string, content, ord: maxOrd + 1 + idx };
+            const mid = typeof m.info?.id === "string" ? m.info.id : "";
+            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : startIdx + idx;
+            return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
           });
-          const result = await (historian as any).compress(sessionId, windowMsgs);
+          const result = await (historian as any).compress(sid, windowMsgs);
           if (result) compartmentStore.save(result);
           writeFileSync("/tmp/neural-init-compress.log", JSON.stringify({ ts: Date.now(), pct, chunkSize, success: !!result }));
         }
@@ -1766,7 +1814,6 @@ List the angles in 1-2 sentences each. Be concise.`;
         }
 
         let compartments = compartmentStore.getForSession(openCodeSessionId);
-        let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
 
         const rendered: Array<any> = [];
 
@@ -1774,7 +1821,23 @@ List the angles in 1-2 sentences each. Be concise.`;
         // This avoids LLM language confusion (English summaries as "user" messages)
         // and double-injection of the same content.
 
-        const tailStart = maxCompartOrd + 1;
+        // Locate the tail by the last compartment's endMessageId inside the CURRENT transform
+        // array, not by a persisted array index. opencode hands transform a differently-sized
+        // array each pass (parts expand/collapse), so a stored index points at the wrong
+        // message on the next pass — that misalignment stalled compression ("Input too long").
+        const msgIdToIndex = new Map<string, number>();
+        for (let i = 0; i < messages.length; i++) {
+          const mid = messages[i].info?.id;
+          if (typeof mid === "string") msgIdToIndex.set(mid, i);
+        }
+        const lastEndMessageId = compartments.length > 0 ? compartments[compartments.length - 1].endMessageId : "";
+        let tailStart: number;
+        if (lastEndMessageId && msgIdToIndex.has(lastEndMessageId)) {
+          tailStart = (msgIdToIndex.get(lastEndMessageId) as number) + 1;
+        } else {
+          tailStart = 0;
+        }
+        let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
         let tail: Array<any>;
 
         const tailBudgetTokens = Math.round(contextLimit * TARGET_USAGE_PCT);
@@ -2045,6 +2108,8 @@ List the angles in 1-2 sentences each. Be concise.`;
             writeFileSync("/tmp/neural-rendered-sample.json", JSON.stringify({
               ts: Date.now(),
               renderedCount: rendered.length,
+              msgIdSample: messages.slice(0, 3).map((m: any) => m.info?.id ?? null),
+              msgIdCoverage: messages.filter((m: any) => m.info?.id).length + "/" + messages.length,
               firstMsg: rendered[0] ? { role: rendered[0].info?.role, partsCount: rendered[0].parts?.length, partTypes: (rendered[0].parts ?? []).map((p: any) => p.type) } : null,
               lastMsg: rendered[rendered.length - 1] ? { role: rendered[rendered.length - 1].info?.role, partsCount: rendered[rendered.length - 1].parts?.length, partTypes: (rendered[rendered.length - 1].parts ?? []).map((p: any) => p.type) } : null,
             }, null, 2));
@@ -2059,7 +2124,7 @@ List the angles in 1-2 sentences each. Be concise.`;
 
         const hasUncoveredNewMessages = (() => {
           if (lastCompressTime === 0) return false;
-          for (let i = maxCompartOrd + 1; i < messages.length; i++) {
+          for (let i = tailStart; i < messages.length; i++) {
             const msgTime = messages[i].info?.time?.created ? messages[i].info.time.created * 1000 : 0;
             if (msgTime > lastCompressTime) return true;
           }
@@ -2075,14 +2140,19 @@ List the angles in 1-2 sentences each. Be concise.`;
           return false;
         })();
 
-        if (shouldFireHistorian && maxCompartOrd < messages.length - PROTECTED_TAGS_COUNT - 1) {
-          const tailStartIdx = Math.max(0, maxCompartOrd + 1);
+        if (shouldFireHistorian && tailStart < messages.length - PROTECTED_TAGS_COUNT - 1) {
+          const tailStartIdx = Math.max(0, tailStart);
           const historianChunkTokens = Math.max(8000, Math.min(50000, Math.round(contextLimit * 0.25)));
           const chunkSize = Math.min(Math.round(historianChunkTokens / 500), tailCount);
+          const dbList = getSessionMessageList(openCodeSessionId);
+          const dbOrdById = new Map<string, number>();
+          for (const r of dbList) dbOrdById.set(r.id, r.ord);
           const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize).map((m: any, idx: number) => {
             const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
             const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            return { role: (m.info?.role ?? "user") as string, content, ord: tailStartIdx + idx };
+            const mid = typeof m.info?.id === "string" ? m.info.id : "";
+            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : tailStartIdx + idx;
+            return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
           });
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
@@ -2175,6 +2245,8 @@ JSON:`;
                             sessionId: openCodeSessionId,
                             startOrd: windowMsgs[0].ord,
                             endOrd: windowMsgs[windowMsgs.length - 1].ord,
+                            startMessageId: windowMsgs[0].id ?? "",
+                            endMessageId: windowMsgs[windowMsgs.length - 1].id ?? "",
                             p1: String(parsed.p1),
                             p2: String(parsed.p2),
                             p3: String(parsed.p3),
@@ -2388,12 +2460,23 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
         } else if (command === "ctx-recomp" || command === "neural-recomp") {
           if (historian) {
             const messages = (await client.session.messages({ path: { id: currentOpenCodeSessionId || sessionId }, query: { limit: 50 } })).data ?? [];
-            const maxOrd = compartmentStore.getMaxOrd(sessionId);
-            const uncovered = messages.slice(maxOrd + 1, maxOrd + 13);
+            const comps = compartmentStore.getForSession(sessionId);
+            const lastEndMid = comps.length > 0 ? comps[comps.length - 1].endMessageId : "";
+            const dbList = getSessionMessageList(sessionId);
+            const dbOrdById = new Map<string, number>();
+            for (const r of dbList) dbOrdById.set(r.id, r.ord);
+            let startIdx = 0;
+            if (lastEndMid) {
+              const found = messages.findIndex((m: any) => m.info?.id === lastEndMid);
+              startIdx = found >= 0 ? found + 1 : 0;
+            }
+            const uncovered = messages.slice(startIdx, startIdx + 12);
             const windowMsgs = uncovered.map((m: any, idx: number) => {
               const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
               const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-              return { role: m.info.role as string, content, ord: maxOrd + 1 + idx };
+              const mid = typeof m.info?.id === "string" ? m.info.id : "";
+              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : startIdx + idx;
+              return { role: m.info.role as string, content, ord, id: mid };
             });
             if (windowMsgs.length >= 6) {
               const result = await (historian as any).compress(sessionId, windowMsgs);

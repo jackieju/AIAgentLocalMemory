@@ -5,6 +5,8 @@ export interface Compartment {
   sessionId: string;
   startOrd: number;
   endOrd: number;
+  startMessageId: string;
+  endMessageId: string;
   p1: string;
   p2: string;
   p3: string;
@@ -23,6 +25,7 @@ export interface HistorianMessage {
   role: string;
   content: string;
   ord: number;
+  id?: string;
 }
 
 const HISTORIAN_PROMPT = `You compress conversation history into three fidelity tiers.
@@ -99,6 +102,8 @@ export class Historian {
         sessionId,
         startOrd: window[0].ord,
         endOrd: window[window.length - 1].ord,
+        startMessageId: window[0].id ?? "",
+        endMessageId: window[window.length - 1].id ?? "",
         p1: String(parsed.p1),
         p2: String(parsed.p2),
         p3: String(parsed.p3),

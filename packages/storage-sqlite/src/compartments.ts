@@ -6,6 +6,8 @@ interface CompartmentRow {
   sessionId: string;
   startOrd: number;
   endOrd: number;
+  startMessageId: string;
+  endMessageId: string;
   p1: string;
   p2: string;
   p3: string;
@@ -28,12 +30,14 @@ export class CompartmentStore {
         session_id TEXT NOT NULL,
         start_ord INTEGER NOT NULL,
         end_ord INTEGER NOT NULL,
+        start_message_id TEXT NOT NULL DEFAULT '',
+        end_message_id TEXT NOT NULL DEFAULT '',
         p1 TEXT NOT NULL,
         p2 TEXT NOT NULL,
         p3 TEXT NOT NULL,
         token_count INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
-        UNIQUE(session_id, start_ord)
+        UNIQUE(session_id, end_message_id)
       )
     `);
     this.db.exec(
@@ -41,15 +45,22 @@ export class CompartmentStore {
     );
   }
 
+  dropAndRecreate(): void {
+    this.db.exec(`DROP TABLE IF EXISTS compartments`);
+    this.createTable();
+  }
+
   save(c: Omit<Compartment, "id">): Compartment {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO compartments (session_id, start_ord, end_ord, p1, p2, p3, token_count, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO compartments (session_id, start_ord, end_ord, start_message_id, end_message_id, p1, p2, p3, token_count, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const result = stmt.run(
       c.sessionId,
       c.startOrd,
       c.endOrd,
+      c.startMessageId ?? "",
+      c.endMessageId ?? "",
       c.p1,
       c.p2,
       c.p3,
@@ -62,7 +73,7 @@ export class CompartmentStore {
   getForSession(sessionId: string): Compartment[] {
     const rows = this.db
       .prepare(
-        `SELECT id, session_id as sessionId, start_ord as startOrd, end_ord as endOrd, p1, p2, p3, token_count as tokenCount, created_at as createdAt FROM compartments WHERE session_id = ? ORDER BY start_ord ASC`
+        `SELECT id, session_id as sessionId, start_ord as startOrd, end_ord as endOrd, start_message_id as startMessageId, end_message_id as endMessageId, p1, p2, p3, token_count as tokenCount, created_at as createdAt FROM compartments WHERE session_id = ? ORDER BY start_ord ASC`
       )
       .all(sessionId) as CompartmentRow[];
     return rows;

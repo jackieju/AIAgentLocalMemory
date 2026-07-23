@@ -8,6 +8,11 @@ echo "$BN" > "$BN_FILE"
 SRC="packages/adapter-opencode/src/index.ts"
 sed -i '' "s/__BUILD_NUMBER__/$BN/g" "$SRC"
 
+# Rebuild workspace deps first — the adapter bundle inlines core/ and storage-sqlite/
+# from their dist/index.js, so changes to those packages are invisible until rebuilt.
+bun build packages/core/src/index.ts --outdir packages/core/dist --target node --format esm
+bun build packages/storage-sqlite/src/index.ts --outdir packages/storage-sqlite/dist --target node --format esm
+
 bun build packages/adapter-opencode/src/index.ts --outdir packages/adapter-opencode/dist --target bun --external "@opencode-ai/plugin"
 
 # Restore placeholder in source
