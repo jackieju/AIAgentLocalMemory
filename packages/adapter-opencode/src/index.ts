@@ -209,9 +209,9 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     const db = rawStorage.getDb();
     db.exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)`);
     const v = db.prepare(`SELECT value FROM kv WHERE key = 'compartments_schema'`).get() as { value: string } | undefined;
-    if (v?.value !== "3") {
+    if (v?.value !== "4") {
       compartmentStore.dropAndRecreate();
-      db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('compartments_schema', '3')`).run();
+      db.prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('compartments_schema', '4')`).run();
     }
   } catch {}
 
@@ -266,6 +266,27 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         out.push({ id: r.id, role: String(r.role ?? "user"), ord });
       }
       return out;
+    } catch { return []; }
+  }
+
+  function getSessionMessagePartsForOrds(sid: string, startOrd: number, endOrd: number): Array<{ ord: number; id: string; role: string; content: string }> {
+    if (!openCodeDb) return [];
+    try {
+      const list = getSessionMessageList(sid);
+      const wanted = list.filter((m) => m.ord >= startOrd && m.ord <= endOrd);
+      if (wanted.length === 0) return [];
+      const partStmt = openCodeDb.prepare(
+        `SELECT json_extract(data, '$.text') AS text, json_extract(data, '$.type') AS type
+         FROM opencode.part WHERE session_id = ? AND message_id = ? ORDER BY id ASC`
+      );
+      return wanted.map((m) => {
+        let content = "";
+        try {
+          const rows = partStmt.all(sid, m.id) as Array<{ text: string | null; type: string | null }>;
+          content = rows.filter((r) => r.type === "text" && r.text).map((r) => r.text).join("\n").slice(0, 1000);
+        } catch {}
+        return { ord: m.ord, id: m.id, role: m.role, content };
+      });
     } catch { return []; }
   }
 
@@ -341,29 +362,13 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const pct = (row.prompt / contextLimit) * 100;
         if (pct >= 90) {
           const comps = compartmentStore.getForSession(sid);
-          const lastEndMid = comps.length > 0 ? comps[comps.length - 1].endMessageId : "";
-          const msgsResult = await client.session.messages({ path: { id: sid }, query: { limit: 100 } });
-          if (!msgsResult.data) return;
+          const lastEndOrd = comps.length > 0 ? comps[comps.length - 1].endOrd : 0;
           const dbList = getSessionMessageList(sid);
-          const dbOrdById = new Map<string, number>();
-          for (const r of dbList) dbOrdById.set(r.id, r.ord);
-          const arr = msgsResult.data;
-          let startIdx = 0;
-          if (lastEndMid) {
-            const found = arr.findIndex((m: any) => m.info?.id === lastEndMid);
-            startIdx = found >= 0 ? found + 1 : 0;
-          }
-          const uncovered = arr.slice(startIdx);
-          if (uncovered.length < 6) return;
-          const chunkSize = Math.min(64, uncovered.length - 20);
+          if (dbList.length - lastEndOrd < 26) return;
+          const chunkSize = Math.min(64, dbList.length - lastEndOrd - 20);
           if (chunkSize < 6) return;
-          const windowMsgs = uncovered.slice(0, chunkSize).map((m: any) => {
-            const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-            const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-            const mid = typeof m.info?.id === "string" ? m.info.id : "";
-            const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
-            return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
-          }).filter((m: { ord: number }) => m.ord >= 0);
+          const windowMsgs = getSessionMessagePartsForOrds(sid, lastEndOrd + 1, lastEndOrd + chunkSize);
+          if (windowMsgs.length < 6) return;
           const result = await (historian as any).compress(sid, windowMsgs);
           if (result) compartmentStore.save(result);
           writeFileSync("/tmp/neural-init-compress.log", JSON.stringify({ ts: Date.now(), pct, chunkSize, success: !!result }));
@@ -1841,13 +1846,17 @@ List the angles in 1-2 sentences each. Be concise.`;
         let tail: Array<any>;
 
         const tailBudgetTokens = Math.round(contextLimit * TARGET_USAGE_PCT);
-        if (messages.length <= tailStart) {
-          // All messages are beyond compartment coverage — keep everything
-          tail = messages.slice(0);
-        } else {
+        {
+          // Always run the token-budget scan from the end backward — never emit the
+          // whole array unbounded. The removed `if (messages.length <= tailStart)`
+          // escape hatch emitted every message with no budget, which is exactly how
+          // a bounded-usage session still produced "Input is too long" (out=512).
+          // tailStart is only a floor: we won't cross below it (compartment coverage),
+          // but the budget can cut the tail shorter.
+          const floor = Math.max(0, Math.min(tailStart, messages.length));
           let tailTokens = 0;
           let startIdx = messages.length;
-          for (let i = messages.length - 1; i >= tailStart; i--) {
+          for (let i = messages.length - 1; i >= floor; i--) {
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
@@ -1867,7 +1876,7 @@ List the angles in 1-2 sentences each. Be concise.`;
             startIdx = i;
           }
 
-          if (lastTailStartIdx >= tailStart && lastTailStartIdx <= startIdx + 5 && lastTailStartIdx < messages.length) {
+          if (lastTailStartIdx >= floor && lastTailStartIdx <= startIdx + 5 && lastTailStartIdx < messages.length) {
             startIdx = lastTailStartIdx;
           }
           lastTailStartIdx = startIdx;
@@ -2140,22 +2149,19 @@ List the angles in 1-2 sentences each. Be concise.`;
           return false;
         })();
 
-        if (shouldFireHistorian && tailStart < messages.length - PROTECTED_TAGS_COUNT - 1) {
-          const tailStartIdx = Math.max(0, tailStart);
+        const lastEndOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : 0;
+        const dbListFull = getSessionMessageList(openCodeSessionId);
+        if (shouldFireHistorian && dbListFull.length - lastEndOrd > PROTECTED_TAGS_COUNT + 1) {
           const historianChunkTokens = Math.max(8000, Math.min(50000, Math.round(contextLimit * 0.25)));
-          const chunkSize = Math.min(Math.round(historianChunkTokens / 500), tailCount);
-          const dbList = getSessionMessageList(openCodeSessionId);
-          const dbOrdById = new Map<string, number>();
-          for (const r of dbList) dbOrdById.set(r.id, r.ord);
-          const windowMsgs = messages.slice(tailStartIdx, tailStartIdx + chunkSize)
-            .map((m: any) => {
-              const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-              const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-              const mid = typeof m.info?.id === "string" ? m.info.id : "";
-              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
-              return { role: (m.info?.role ?? "user") as string, content, ord, id: mid };
-            })
-            .filter((m: { ord: number }) => m.ord >= 0);
+          const chunkSize = Math.round(historianChunkTokens / 500);
+          // Build the compression window straight from the DB (stable ordinals + ids),
+          // not from the mutated transform array. The array was already spliced/tagged
+          // and dropping id-unmatched entries left compartments covering almost nothing.
+          const windowMsgs = getSessionMessagePartsForOrds(
+            openCodeSessionId,
+            lastEndOrd + 1,
+            lastEndOrd + chunkSize
+          );
 
           if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
             writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history (background)...`);
@@ -2461,25 +2467,9 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
           output.handled = true;
         } else if (command === "ctx-recomp" || command === "neural-recomp") {
           if (historian) {
-            const messages = (await client.session.messages({ path: { id: currentOpenCodeSessionId || sessionId }, query: { limit: 50 } })).data ?? [];
             const comps = compartmentStore.getForSession(sessionId);
-            const lastEndMid = comps.length > 0 ? comps[comps.length - 1].endMessageId : "";
-            const dbList = getSessionMessageList(sessionId);
-            const dbOrdById = new Map<string, number>();
-            for (const r of dbList) dbOrdById.set(r.id, r.ord);
-            let startIdx = 0;
-            if (lastEndMid) {
-              const found = messages.findIndex((m: any) => m.info?.id === lastEndMid);
-              startIdx = found >= 0 ? found + 1 : 0;
-            }
-            const uncovered = messages.slice(startIdx, startIdx + 12);
-            const windowMsgs = uncovered.map((m: any) => {
-              const textParts = (m.parts ?? []).filter((p: any) => p.type === "text");
-              const content = textParts.map((p: any) => p.text ?? "").join("\n").slice(0, 1000);
-              const mid = typeof m.info?.id === "string" ? m.info.id : "";
-              const ord = mid && dbOrdById.has(mid) ? (dbOrdById.get(mid) as number) : -1;
-              return { role: m.info.role as string, content, ord, id: mid };
-            }).filter((m: { ord: number }) => m.ord >= 0);
+            const lastEndOrd = comps.length > 0 ? comps[comps.length - 1].endOrd : 0;
+            const windowMsgs = getSessionMessagePartsForOrds(sessionId, lastEndOrd + 1, lastEndOrd + 12);
             if (windowMsgs.length >= 6) {
               const result = await (historian as any).compress(sessionId, windowMsgs);
               if (result) {
