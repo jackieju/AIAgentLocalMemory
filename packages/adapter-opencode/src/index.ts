@@ -7,6 +7,19 @@ import { tool } from "@opencode-ai/plugin";
 import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider, Compartment } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
+import { Tokenizer } from "ai-tokenizer";
+import * as claudeEncoding from "ai-tokenizer/encoding/claude";
+
+// Real Claude BPE tokenizer (same approach as magic-context). A char/4 + CJK
+// heuristic mis-measures the conversation bucket — it over-counts prose ~4x and
+// under-counts JSON/base64/CJK tool blobs, so no single fudge factor works. Using
+// the actual tokenizer removes the guesswork that caused both over-compression and
+// the 67K-estimate/214K-wire "Input is too long" overflow.
+const claudeTokenizer = new Tokenizer(claudeEncoding as any);
+function countClaudeTokens(text: string): number {
+  if (!text) return 0;
+  try { return claudeTokenizer.encode(text, [], "all").length; } catch { return Math.ceil(text.length / 4); }
+}
 
 interface PluginConfig {
   injectSystemPrompt?: boolean;
@@ -1786,13 +1799,6 @@ List the angles in 1-2 sentences each. Be concise.`;
         const FORCE_COMPARTMENT_PCT = 80;
         const TARGET_USAGE_PCT = 0.55;
         const ABORT_PCT = 95;
-        // Our local char/4 + CJK estimator under-counts what Anthropic actually tokenizes
-        // for the conversation bucket — tool_result blobs (JSON/base64/logs/CJK) measure
-        // ~3x larger on the wire. opencode calibrates system/tools buckets (1.51/1.57) but
-        // has NO conversation ratio, so our tail budget passed a 67K-estimate tail that
-        // billed as 214K → "Input is too long". Apply a conversation calibration factor so
-        // the budget reflects real wire tokens. Conservative 3.0 for opus-class models.
-        const CONVERSATION_TOKEN_RATIO = 3.0;
         const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
         const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
 
@@ -1894,13 +1900,8 @@ List the angles in 1-2 sentences each. Be concise.`;
             let msgTokens = 10;
             for (const part of (messages[i].parts ?? [])) {
               const text = partBillableText(part);
-              if (text) {
-                const sampleLen = Math.min(text.length, 1000);
-                const sampleTokens = estimateTokens(text.slice(0, sampleLen));
-                msgTokens += sampleLen > 0 ? Math.ceil(sampleTokens * (text.length / sampleLen)) : 0;
-              }
+              if (text) msgTokens += countClaudeTokens(text);
             }
-            msgTokens = Math.ceil(msgTokens * CONVERSATION_TOKEN_RATIO);
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
@@ -2158,7 +2159,7 @@ List the angles in 1-2 sentences each. Be concise.`;
             for (const m of messages) {
               for (const p of (m.parts ?? [])) {
                 const t = partBillableText(p);
-                if (t) { const sl = Math.min(t.length, 1000); tailEstTokens += Math.ceil(estimateTokens(t.slice(0, sl)) * (t.length / Math.max(sl, 1)) * CONVERSATION_TOKEN_RATIO); }
+                if (t) { tailEstTokens += countClaudeTokens(t); }
               }
             }
             writeFileSync(`/tmp/neural-rendered-${openCodeSessionId}.json`, JSON.stringify({
