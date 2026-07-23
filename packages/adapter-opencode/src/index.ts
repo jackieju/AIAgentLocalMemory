@@ -1789,8 +1789,14 @@ List the angles in 1-2 sentences each. Be concise.`;
             for (const part of (messages[i].parts ?? [])) {
               const text = (part as any).text ?? "";
               if (text) {
-                const effectiveLen = Math.min(text.length, 1000);
-                msgTokens += estimateTokens(text.slice(0, effectiveLen));
+                // Estimate on a capped sample for speed, then scale back up to the full
+                // length. Previously we only counted the first 1000 chars WITHOUT scaling,
+                // which under-counted large messages (e.g. 7000-char tool outputs) ~7x,
+                // so the budget loop kept far more than TARGET_USAGE_PCT and the prompt
+                // blew past the model context limit ("Input is too long").
+                const sampleLen = Math.min(text.length, 1000);
+                const sampleTokens = estimateTokens(text.slice(0, sampleLen));
+                msgTokens += sampleLen > 0 ? Math.ceil(sampleTokens * (text.length / sampleLen)) : 0;
               }
             }
             if (tailTokens + msgTokens > tailBudgetTokens) break;
