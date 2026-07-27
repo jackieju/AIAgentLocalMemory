@@ -16,9 +16,22 @@ import * as claudeEncoding from "ai-tokenizer/encoding/claude";
 // the actual tokenizer removes the guesswork that caused both over-compression and
 // the 67K-estimate/214K-wire "Input is too long" overflow.
 const claudeTokenizer = new Tokenizer(claudeEncoding as any);
+
+// ai-tokenizer's `claude` encoding is the OLD Claude tokenizer. Opus 4.7+, Sonnet 5,
+// Fable/Mythos 5 switched to a NEW tokenizer that produces ~30% more tokens for the same
+// text (per Anthropic's pricing docs). Upstream ai-tokenizer (1.0.6, latest) ships no
+// separate encoding for it, so we compensate: multiply the old-encoding count by ~1.3 when
+// the active model uses the new tokenizer. Without this the tail budget under-counts ~30%
+// on 4.8 and overflows the context ("Input is too long"). Updated via setActiveTokenizerModel().
+let newTokenizerMultiplier = 1.0;
+const NEW_TOKENIZER_PATTERN = /(opus-4[.-](?:[7-9]|1[0-9])|claude-4[.-](?:[7-9]|1[0-9])-opus|sonnet-5|haiku-5|claude-fable|claude-mythos|fable-5|mythos-5)/i;
+function setActiveTokenizerModel(modelKey: string | undefined | null): void {
+  newTokenizerMultiplier = modelKey && NEW_TOKENIZER_PATTERN.test(modelKey) ? 1.3 : 1.0;
+}
 function countClaudeTokens(text: string): number {
   if (!text) return 0;
-  try { return claudeTokenizer.encode(text, [], "all").length; } catch { return Math.ceil(text.length / 4); }
+  try { return Math.ceil(claudeTokenizer.encode(text, [], "all").length * newTokenizerMultiplier); }
+  catch { return Math.ceil((text.length / 4) * newTokenizerMultiplier); }
 }
 
 interface PluginConfig {
@@ -26,8 +39,10 @@ interface PluginConfig {
   contextWindowTokens?: number;
   budgetRatio?: number;
   protectedTags?: number;
+  systemToolsReservePct?: number;
   coexistWithOtherContextManager?: boolean;
   syncRepo?: string;
+  recallStrategy?: "plugin" | "llm";
   llm?: {
     provider: "openai" | "ollama" | "custom";
     baseUrl?: string;
@@ -152,6 +167,26 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
 
   const opLog = new OperationLog(syncDir);
   const storage = new LoggedStorageProvider(rawStorage, opLog);
+
+  const NODE_ALLOW_TYPES = new Set([
+    "episode", "fact", "concept", "assertion", "definition", "experience", "meta", "filler",
+  ]);
+  async function safePutNode(node: any, opts?: { fromToolOutput?: boolean }): Promise<boolean> {
+    try {
+      if (opts?.fromToolOutput === true) return false;
+      if (!node || typeof node.content !== "string") return false;
+      if (!NODE_ALLOW_TYPES.has(node.type)) return false;
+      const c = node.content;
+      if (c.length === 0) return false;
+      // Reject raw tool-output signatures: JSON result envelopes and result markers.
+      if (/^\s*\{[\s\S]*"(output|stdout|stderr|tool_result|exit_code)"\s*:/.test(c)) return false;
+      if (/\[tool[_-]?result\]|\[replay-shortcircuit\]/i.test(c)) return false;
+      await storage.putNode(node);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   let llmProvider: LLMProvider | undefined;
   let embeddingProvider: EmbeddingProvider | undefined;
@@ -315,6 +350,63 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     : null;
   let historianTurnCount = 0;
 
+  const recallStrategy = pluginConfig.recallStrategy ?? "plugin";
+
+  // recallStrategy="llm" mirrors Claude Code: build a cheap lexical manifest,
+  // then let the LLM pick relevant entries (no embedding/spreading-activation).
+  async function llmRecall(query: string, maxResults: number): Promise<RecallResult[]> {
+    const CANDIDATE_LIMIT = 30;
+    const candidates = await storage.search(query, CANDIDATE_LIMIT);
+    if (candidates.length === 0) return [];
+    if (!historianLlm) {
+      return candidates.slice(0, maxResults).map((node) => ({ node, score: 0.5 }));
+    }
+
+    const manifest = candidates
+      .map((n, i) => {
+        const snippet = n.content.replace(/\s+/g, " ").slice(0, 240);
+        return `${i + 1}. [${n.type}] ${snippet}`;
+      })
+      .join("\n");
+
+    const prompt = [
+      "You are selecting which stored memories are relevant to a user query.",
+      "Below is a numbered list of candidate memories.",
+      `Query: ${query}`,
+      "",
+      "Candidates:",
+      manifest,
+      "",
+      `Return ONLY a JSON array of the numbers (max ${Math.min(maxResults, 5)}) of the memories that are genuinely relevant to the query, most relevant first. If none are relevant, return []. Example: [3,1,7]`,
+    ].join("\n");
+
+    let picked: number[] = [];
+    try {
+      const response = await historianLlm.complete(prompt, { maxTokens: 100 });
+      const match = response.match(/\[[\s\d,]*\]/);
+      if (match) {
+        picked = JSON.parse(match[0]) as number[];
+      }
+    } catch {
+      picked = [];
+    }
+
+    const seen = new Set<number>();
+    const results: RecallResult[] = [];
+    let rank = 0;
+    for (const idx of picked) {
+      const node = candidates[idx - 1];
+      if (!node || seen.has(idx)) continue;
+      seen.add(idx);
+      results.push({ node, score: 1 - rank * 0.1 });
+      rank++;
+      if (results.length >= maxResults) break;
+    }
+    if (results.length === 0) {
+      return candidates.slice(0, maxResults).map((node) => ({ node, score: 0.5 }));
+    }
+    return results;
+  }
   const SERVER_BUILD = "__BUILD_NUMBER__";
   writeFileSync("/tmp/neural-server-build.txt", SERVER_BUILD);
   writeFileSync("/tmp/neural-plugin-init.log", JSON.stringify({
@@ -401,7 +493,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         const textParts = msg.parts.filter((p: any) => p.type === "text");
         const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
         if (content.length < 10 || content.length > 3000) continue;
-        await storage.putNode({
+        await safePutNode({
           id: crypto.randomUUID(),
           type: "episode",
           content: content.slice(0, 2000),
@@ -469,7 +561,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           const textParts = msg.parts.filter((p: any) => p.type === "text");
           const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
           if (content.length < 10 || content.length > 3000) continue;
-          await storage.putNode({
+          await safePutNode({
             id: crypto.randomUUID(),
             type: "episode",
             content: content.slice(0, 2000),
@@ -911,13 +1003,14 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
           maxResults: z.number().int().positive().max(100).optional().describe("Max results (default 10)."),
         },
         async execute(args) {
-          const results = await engine.recall(args.query, {
-            maxResults: args.maxResults ?? 10,
-          });
+          const maxResults = args.maxResults ?? 10;
+          const results = recallStrategy === "llm"
+            ? await llmRecall(args.query, maxResults)
+            : await engine.recall(args.query, { maxResults });
           return {
             title: `Recalled ${results.length} memor${results.length === 1 ? "y" : "ies"}`,
             output: formatRecall(results),
-            metadata: { count: results.length },
+            metadata: { count: results.length, strategy: recallStrategy },
           };
         },
       }),
@@ -1693,6 +1786,27 @@ List the angles in 1-2 sentences each. Be concise.`;
         const messages = output.messages;
         if (!messages || messages.length === 0) return;
 
+        // Idempotency guard. OpenCode may invoke this transform more than once per turn
+        // on the SAME output.messages reference (mutated in place). We detect this ONLY via a
+        // non-enumerable Symbol on the array object — NOT via a §N§ text scan. The §N§ tags we
+        // prepend get persisted into opencode's DB and reappear as ordinary input on later
+        // turns; a text scan then false-positives on any array containing tagged history and
+        // no-ops the whole thing, emitting thousands of un-compressed messages ("Input is too
+        // long"). The Symbol lives only on the live array reference, so it cannot leak via the
+        // DB. Per-part re-tagging is already guarded (startsWith("§")), so a rare missed no-op
+        // just re-renders harmlessly rather than double-tagging.
+        const RENDERED_SENTINEL = Symbol.for("ai-agent-local-memory.rendered");
+        if ((messages as any)[RENDERED_SENTINEL]) {
+          try {
+            writeFileSync("/tmp/neural-echo-diag.log",
+              `${new Date().toISOString()} out=${messages.length} IDEMPOTENT-NOOP (already rendered)\n`,
+              { flag: "a" });
+          } catch {}
+          return;
+        }
+
+        const originalMessagesSnapshot = messages.slice();
+
         const openCodeSessionId = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
             const msg = messages[i];
@@ -1826,6 +1940,8 @@ List the angles in 1-2 sentences each. Be concise.`;
           lastModelKey = `${lastAssistantModel.providerID}/${lastAssistantModel.modelID}`;
         }
 
+        setActiveTokenizerModel(lastAssistantModel?.modelID ?? lastModelKey);
+
         if (realUsage.percentage > 0) {
           lastContextPercentage = realUsage.percentage;
         }
@@ -1885,7 +2001,54 @@ List the angles in 1-2 sentences each. Be concise.`;
         let maxCompartOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : -1;
         let tail: Array<any>;
 
-        const tailBudgetTokens = Math.round(contextLimit * TARGET_USAGE_PCT);
+        // L2 headroom reserve: transform sees only the conversation, but opencode
+        // later prepends system prompt + tool schemas billed heavier than estimate
+        // (~1.51x/1.57x). Spending the full TARGET_USAGE_PCT on conversation lets
+        // system+tools overflow the assembled request ("Input too long" mid-turn).
+        const SYSTEM_TOOLS_RESERVE_PCT = pluginConfig.systemToolsReservePct ?? 0.18;
+        const systemToolsReserveTokens = Math.round(contextLimit * SYSTEM_TOOLS_RESERVE_PCT);
+        // L4 circuit breaker: when the historian keeps failing (413/timeout), no
+        // compartment is produced so the tail cannot shrink and the next request
+        // 413s again. Each consecutive failure halves the tail budget (down to a
+        // floor) so the wire request drops below the limit even without compaction.
+        const breakerFactor = Math.max(0.25, Math.pow(0.5, Math.min(historianFailureCount, 3)));
+        const tailBudgetTokens = Math.max(
+          Math.round(contextLimit * 0.1),
+          Math.round((Math.round(contextLimit * TARGET_USAGE_PCT) - systemToolsReserveTokens) * breakerFactor),
+        );
+
+        // L1 microCompact MUST run before the L2 budget scan below: it stubs oversized
+        // tool outputs on messages[] so the scan measures post-stub sizes. Mutating
+        // messages[] propagates into the tail slice (shared object refs). Reordering
+        // reintroduces the "Input too long" under-budgeting bug.
+        const MICROCOMPACT_TRIGGER_CHARS = 50000;
+        const MICROCOMPACT_STUB_CHARS = 2000;
+        const MICROCOMPACT_KEEP_RECENT = 3;
+        {
+          const largeToolMsgIdx: number[] = [];
+          for (let i = 0; i < messages.length; i++) {
+            for (const part of (messages[i].parts ?? [])) {
+              const st = (part as any).state;
+              const out = st && typeof st.output === "string" ? st.output : (typeof (part as any).content === "string" ? (part as any).content : "");
+              if (out && out.length > MICROCOMPACT_TRIGGER_CHARS) { largeToolMsgIdx.push(i); break; }
+            }
+          }
+          const microKeepFrom = largeToolMsgIdx.length > MICROCOMPACT_KEEP_RECENT
+            ? largeToolMsgIdx[largeToolMsgIdx.length - MICROCOMPACT_KEEP_RECENT]
+            : Infinity;
+          for (const i of largeToolMsgIdx) {
+            if (i >= microKeepFrom) continue;
+            for (const part of (messages[i].parts ?? [])) {
+              const st = (part as any).state;
+              if (st && typeof st.output === "string" && st.output.length > MICROCOMPACT_TRIGGER_CHARS) {
+                st.output = st.output.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+              }
+              if (typeof (part as any).content === "string" && (part as any).content.length > MICROCOMPACT_TRIGGER_CHARS) {
+                (part as any).content = (part as any).content.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+              }
+            }
+          }
+        }
         {
           // Always run the token-budget scan from the end backward — never emit the
           // whole array unbounded. The removed `if (messages.length <= tailStart)`
@@ -2196,8 +2359,6 @@ List the angles in 1-2 sentences each. Be concise.`;
               lastMsg: rendered[rendered.length - 1] ? { role: rendered[rendered.length - 1].info?.role, partsCount: rendered[rendered.length - 1].parts?.length, partTypes: (rendered[rendered.length - 1].parts ?? []).map((p: any) => p.type) } : null,
             }, null, 2));
           } catch {}
-        } else if (messages.length > 0) {
-          messages.splice(0, messages.length - 1);
         }
 
         historianTurnCount++;
@@ -2384,7 +2545,8 @@ JSON:`;
                 createdAt: Date.now(),
                 sourceSession: sessionId,
               };
-              await storage.putNode(node);
+              const stored = await safePutNode(node);
+              if (!stored) continue;
               await linker.linkToExisting(node);
             }
           } catch {}
@@ -2414,9 +2576,14 @@ JSON:`;
           (m.parts ?? []).some((p: any) => p.type === "text" && p.text && p.text.trim().length > 0)
         );
         if (!hasContent) {
+          // Never emit a bare "." (the "I see just a period" bug). An empty render means
+          // our filter over-pruned — hand back the caller's original messages untouched.
           output.messages.length = 0;
-          output.messages.push({ info: { role: "user" }, parts: [{ type: "text", text: "." }] });
+          for (const m of originalMessagesSnapshot) output.messages.push(m);
         }
+        try {
+          Object.defineProperty(output.messages, RENDERED_SENTINEL, { value: true, enumerable: false, configurable: true });
+        } catch {}
         try {
           const roleSeq = output.messages.slice(-6).map((m: any) => m.info?.role ?? "?").join(",");
           const lastMsg = output.messages[output.messages.length - 1];
