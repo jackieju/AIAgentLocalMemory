@@ -700,8 +700,12 @@ JSON array of stale indexes:`;
               }
             }
           }
-        } catch {}
-      } catch {}
+        } catch (pruneErr: any) {
+          try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [prune] ${pruneErr?.message ?? pruneErr}\n${pruneErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+        }
+      } catch (dreamErr: any) {
+        try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [dream] ${dreamErr?.message ?? dreamErr}\n${dreamErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+      }
     };
 
     // Cheap, cross-process-safe cooldown gate. Called once per turn from the transform hook.
@@ -2536,7 +2540,9 @@ List the angles in 1-2 sentences each. Be concise.`;
                     lastCompressTime = Date.now();
                     try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
                   }
-                } catch {} finally { compressInFlight.delete(openCodeSessionId); }
+                } catch (compressErr: any) {
+                  try { writeFileSync("/tmp/neural-compress-error.log", `${Date.now()} [force] ${compressErr?.message ?? compressErr}\n${compressErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+                } finally { compressInFlight.delete(openCodeSessionId); }
               })();
             }
           } else if (usagePct >= ABORT_PCT) {
@@ -2552,7 +2558,9 @@ List the angles in 1-2 sentences each. Be concise.`;
                     lastCompressTime = Date.now();
                     try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
                   }
-                } catch {} finally { compressInFlight.delete(openCodeSessionId); }
+                } catch (compressErr: any) {
+                  try { writeFileSync("/tmp/neural-compress-error.log", `${Date.now()} [abort] ${compressErr?.message ?? compressErr}\n${compressErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+                } finally { compressInFlight.delete(openCodeSessionId); }
               })();
             }
           } else {
