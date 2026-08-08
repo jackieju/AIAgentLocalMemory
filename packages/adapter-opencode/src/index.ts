@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, statSync, utimesSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
@@ -542,7 +542,6 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }
 
   let syncTimer: ReturnType<typeof setInterval> | null = null;
-  let dreamerTimer: ReturnType<typeof setInterval> | null = null;
   let reconciliationTimer: ReturnType<typeof setInterval> | null = null;
 
   reconciliationTimer = setInterval(async () => {
@@ -578,7 +577,16 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }, 5 * 60 * 1000);
 
   if (historian) {
-    // Dreamer: daily cron at 2:00 AM (matching magic-context's schedule)
+    // Turn-end cooldown trigger (mirrors Claude Code's autoDream). A 2AM cron never fired
+    // because OpenCode is rarely running then; instead maybeRunDreamer() runs once per turn
+    // from the transform hook, does one stat() on a lock file, and bails unless COOLDOWN_MS
+    // elapsed. The lock's mtime IS "last consolidated at"; its body holds the holder PID so a
+    // dead holder's lock can be reclaimed. Cross-process safe.
+    const DREAM_LOCK = join(dataBase, "ai-agent-local-memory", ".dream-lock");
+    const COOLDOWN_MS = 6 * 60 * 60 * 1000;
+    const HOLDER_STALE_MS = 60 * 60 * 1000;
+    let dreamerRunning = false;
+
     const runDreamer = async () => {
       try {
         const recentEpisodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId, limit: 20 });
@@ -592,6 +600,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
           .map(e => e.content.slice(0, 500))
           .join("\n");
 
+        // ---- Phase A: Consolidate (extract durable facts) ----
         const extractPrompt = `Extract user preferences, decisions, and constraints from this conversation excerpt.
 Return a JSON array of strings — each string is one standalone fact worth remembering long-term.
 Only extract CLEAR preferences/decisions (e.g. "User prefers TypeScript over JavaScript", "Project uses Bun runtime").
@@ -604,19 +613,20 @@ ${transcript}
 JSON:`;
 
         const response = await historianLlm.complete(extractPrompt, { maxTokens: 300 });
-        if (!response) return;
-
-        const jsonMatch = response.match(/\[[\s\S]*\]/);
-        if (!jsonMatch) return;
-
-        const facts: string[] = JSON.parse(jsonMatch[0]);
-        for (const fact of facts) {
-          if (typeof fact !== "string" || fact.length < 10 || fact.length > 500) continue;
-          if (existingFactContents.has(fact.toLowerCase())) continue;
-          await engine.remember(fact, "fact", {
-            importance: 0.8,
-            metadata: { factData: { scope: "global", activationFloor: 0.5, ready: true } },
-          });
+        if (response) {
+          const jsonMatch = response.match(/\[[\s\S]*\]/);
+          if (jsonMatch) {
+            const facts: string[] = JSON.parse(jsonMatch[0]);
+            for (const fact of facts) {
+              if (typeof fact !== "string" || fact.length < 10 || fact.length > 500) continue;
+              if (existingFactContents.has(fact.toLowerCase())) continue;
+              await engine.remember(fact, "fact", {
+                importance: 0.8,
+                metadata: { factData: { scope: "global", activationFloor: 0.5, ready: true } },
+              });
+              existingFactContents.add(fact.toLowerCase());
+            }
+          }
         }
 
         const filePathRegex = /(?:\/[\w.-]+)+\.\w+/g;
@@ -642,24 +652,97 @@ JSON:`;
             importance: 0.7,
             metadata: { factData: { scope: "session", activationFloor: 0.3, ready: true, keyFile: true } },
           });
+          existingFactContents.add(factContent.toLowerCase());
         }
+
+        // ---- Phase B: Prune (delete facts contradicted/superseded by recent signal) ----
+        // Claude Code's dream phase 4 deletes facts that "today's investigation disproves".
+        // We ask the LLM which of the current stored facts are now stale/contradicted given
+        // the recent conversation, and forget those nodes. Only prune GLOBAL/SESSION facts,
+        // never keyFile entries (those are cheap structural pointers), and cap deletions per
+        // run so a hallucinated response can't wipe the store.
+        try {
+          const factsForReview = existingFacts
+            .filter(f => !(f.metadata as any)?.factData?.keyFile)
+            .slice(0, 40);
+          if (factsForReview.length > 0) {
+            const numbered = factsForReview
+              .map((f, i) => `${i}. ${f.content.slice(0, 200)}`)
+              .join("\n");
+            const prunePrompt = `Below is a list of long-term memory facts, and a recent conversation excerpt.
+Return a JSON array of the INDEX NUMBERS of facts that the recent conversation CONTRADICTS or makes clearly OBSOLETE/SUPERSEDED.
+Only include a fact if the conversation provides direct evidence it is now wrong or outdated.
+If none are contradicted, return [].
+Be conservative — when in doubt, keep the fact (omit it).
+
+FACTS:
+${numbered}
+
+RECENT CONVERSATION:
+${transcript}
+
+JSON array of stale indexes:`;
+
+            const pruneResp = await historianLlm.complete(prunePrompt, { maxTokens: 100 });
+            if (pruneResp) {
+              const m = pruneResp.match(/\[[\s\S]*\]/);
+              if (m) {
+                const stale: unknown[] = JSON.parse(m[0]);
+                const idxs = stale
+                  .filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0 && n < factsForReview.length)
+                  .slice(0, 5); // hard cap: never delete more than 5 facts per run
+                for (const idx of idxs) {
+                  const victim = factsForReview[idx];
+                  if (victim?.id) {
+                    try { await storage.deleteNode(victim.id); } catch {}
+                  }
+                }
+              }
+            }
+          }
+        } catch {}
       } catch {}
     };
 
-    // Schedule dreamer at 2:00 AM daily (like magic-context)
-    const scheduleDreamerCron = () => {
-      const now = new Date();
-      const next2am = new Date(now);
-      next2am.setHours(2, 0, 0, 0);
-      if (next2am <= now) next2am.setDate(next2am.getDate() + 1);
-      const msUntilNext = next2am.getTime() - now.getTime();
-      dreamerTimer = setTimeout(async () => {
+    // Cheap, cross-process-safe cooldown gate. Called once per turn from the transform hook.
+    const maybeRunDreamer = async () => {
+      if (dreamerRunning) return;
+      const now = Date.now();
+      try {
+        const st = statSync(DREAM_LOCK);
+        const age = now - st.mtimeMs;
+        if (age < COOLDOWN_MS) {
+          // Cooldown not elapsed — unless the lock is held by a dead holder AND itself stale.
+          let holderAlive = false;
+          try {
+            const pid = parseInt(readFileSync(DREAM_LOCK, "utf-8").trim(), 10);
+            if (Number.isInteger(pid) && pid > 0) {
+              try { process.kill(pid, 0); holderAlive = true; } catch { holderAlive = false; }
+            }
+          } catch {}
+          if (holderAlive || age < HOLDER_STALE_MS) return;
+        }
+      } catch {
+        // No lock file yet → first run is allowed.
+      }
+      // Claim the lock: write our PID and bump mtime to now. This is the "last consolidated at".
+      dreamerRunning = true;
+      try {
+        mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+        writeFileSync(DREAM_LOCK, String(process.pid));
+        utimesSync(DREAM_LOCK, new Date(), new Date());
+      } catch {}
+      try {
         await runDreamer();
-        // Reschedule for next day
-        dreamerTimer = setInterval(runDreamer, 24 * 60 * 60 * 1000);
-      }, msUntilNext) as any;
+      } finally {
+        // Refresh mtime on completion so the full cooldown counts from finish, not start.
+        try { utimesSync(DREAM_LOCK, new Date(), new Date()); } catch {}
+        dreamerRunning = false;
+      }
     };
-    scheduleDreamerCron();
+
+    // Expose the gate so the transform hook can trigger it once per turn.
+    (globalThis as any).__neuralMaybeRunDreamer = maybeRunDreamer;
   }
 
   if (existsSync(join(syncDir, ".git"))) {
@@ -2592,6 +2675,7 @@ JSON:`;
               await linker.linkToExisting(node);
             }
           } catch {}
+          try { await (globalThis as any).__neuralMaybeRunDreamer?.(); } catch {}
         }, 500);
 
         const afterPct = realUsage.percentage > 0

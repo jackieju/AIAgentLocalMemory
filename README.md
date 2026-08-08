@@ -268,6 +268,8 @@ LRU-frequency hybrid queue (default 1000 items). Score = `frequency × exp(-0.01
 
 The plugin is published on npm as [`ai-agent-local-memory`](https://www.npmjs.com/package/ai-agent-local-memory). OpenCode auto-installs npm plugins on startup — no manual `npm install` needed.
 
+> **Note:** The npm release may lag behind the latest development. If you want the most recent fixes and features, install from GitHub source (Option B below).
+
 Add to your OpenCode config (`~/.config/opencode/opencode.jsonc` or project-level `opencode.json`):
 
 ```json
