@@ -997,7 +997,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
 
       neural_recall: tool({
         description:
-          "Find memories by ASSOCIATION — follows neural connections to discover related concepts you didn't explicitly search for. Unlike keyword/vector search, this traverses a graph of concepts via spreading activation: starting from your query, it finds directly related ideas, then ideas related to THOSE, revealing non-obvious connections. Use when you need 'what else relates to X?' or 'what context surrounds Y?'",
+          "Search and recall across ALL past sessions and conversations — use this FIRST for any cross-session search, global search, 'what did we discuss before', 'did I ask/answer X previously', or recalling anything from earlier conversations. Works across EVERY session regardless of project or working directory, and returns full original text (not truncated snippets). Unlike the built-in session_search/session_read/session_list tools — which silently filter by project scope and return empty results for sessions in other projects (causing false 'not found' conclusions) — this tool searches the complete memory graph by meaning, following associative connections (spreading activation) to surface related context you didn't explicitly name. Prefer this whenever the user wants to find, remember, or verify something from a previous session, or asks 'what else relates to X?' / 'what context surrounds Y?'",
         args: {
           query: z.string().min(1).describe("Natural language query."),
           maxResults: z.number().int().positive().max(100).optional().describe("Max results (default 10)."),
@@ -1782,6 +1782,11 @@ List the angles in 1-2 sentences each. Be concise.`;
       ? undefined
       : async (input, output) => {
       try { writeFileSync("/tmp/neural-transform-heartbeat.log", `${new Date().toISOString()} msgs=${output.messages?.length ?? 0}\n`, { flag: "a" }); } catch {}
+      // Hoisted above the try so the post-catch fallback block (which restores these on an
+      // empty render) can still see them; block-scoping them inside the try caused a
+      // ReferenceError that crashed every transform on the !hasContent path.
+      const RENDERED_SENTINEL = Symbol.for("ai-agent-local-memory.rendered");
+      const originalMessagesSnapshot = (output.messages ?? []).slice();
       try {
         const messages = output.messages;
         if (!messages || messages.length === 0) return;
@@ -1795,7 +1800,6 @@ List the angles in 1-2 sentences each. Be concise.`;
         // long"). The Symbol lives only on the live array reference, so it cannot leak via the
         // DB. Per-part re-tagging is already guarded (startsWith("§")), so a rare missed no-op
         // just re-renders harmlessly rather than double-tagging.
-        const RENDERED_SENTINEL = Symbol.for("ai-agent-local-memory.rendered");
         if ((messages as any)[RENDERED_SENTINEL]) {
           try {
             writeFileSync("/tmp/neural-echo-diag.log",
@@ -1805,7 +1809,6 @@ List the angles in 1-2 sentences each. Be concise.`;
           return;
         }
 
-        const originalMessagesSnapshot = messages.slice();
 
         const openCodeSessionId = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
@@ -2299,6 +2302,45 @@ List the angles in 1-2 sentences each. Be concise.`;
               rendered.unshift(summaryMsg);
             }
           }
+
+          // Anthropic rejects a conversation that ends in an assistant-prefill position:
+          // "must end with a user message". A trailing user turn whose ONLY parts are
+          // tool_result blocks (a tool answered, awaiting the assistant) IS such a state,
+          // as is a trailing assistant turn or one of our emptied dedup stubs. Normalize
+          // the boundary in place before splicing back. (Oracle-designed pass.)
+          {
+            const SENTINEL = () => ({ type: "text", text: "Please continue." });
+            const isToolResult = (p: any) => p?.type === "tool_result";
+            const isPureEmptyStub = (m: any) =>
+              (m.parts ?? []).length > 0 &&
+              (m.parts ?? []).every((p: any) => p?.type === "text" && ((p.text ?? "").trim() === ""));
+            const containsToolResult = (m: any) => (m.parts ?? []).some(isToolResult);
+            const allPartsAreToolResult = (parts: any[]) =>
+              (parts ?? []).length > 0 && (parts ?? []).every(isToolResult);
+
+            // 1. Pop trailing pure-empty stubs (our own dedup artifacts), but never pop a
+            //    message carrying a tool_result — that would orphan its assistant tool_use.
+            while (rendered.length > 1) {
+              const last = rendered[rendered.length - 1];
+              if (isPureEmptyStub(last) && !containsToolResult(last)) rendered.pop();
+              else break;
+            }
+
+            if (rendered.length === 0) {
+              rendered.push({ info: { role: "user" }, parts: [SENTINEL()] });
+            } else {
+              const last: any = rendered[rendered.length - 1];
+              const role = last.info?.role;
+              if (role === "assistant") {
+                rendered.push({ info: { role: "user" }, parts: [SENTINEL()] });
+              } else if (role === "user" && allPartsAreToolResult(last.parts)) {
+                last.parts.push(SENTINEL());
+              } else if (role === "user" && isPureEmptyStub(last)) {
+                last.parts = [SENTINEL()];
+              }
+            }
+          }
+
           messages.splice(0, messages.length, ...rendered);
 
           const lastUserMsg = rendered.findLast((m: any) => m.info?.role === "user");
