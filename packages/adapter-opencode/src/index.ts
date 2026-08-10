@@ -750,7 +750,7 @@ JSON:`;
               await engine.remember(trait, nodeType, {
                 importance: Math.min(0.95, 0.55 + 0.35 * depth),
                 metadata: {
-                  characterData: { scope: "global", layer, observationCount: 1, confidence, evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "" },
+                  characterData: { scope: "global", layer, observationCount: 1, confidence, source: "organic", reviewStatus: "ready", evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "" },
                 },
               });
               existingChar.push({ id: "pending", type: nodeType, content: trait, importance: 0.6, strength: 0.5, accessCount: 0, lastAccessed: Date.now(), createdAt: Date.now(), metadata: { characterData: { layer, observationCount: 1, confidence } } } as any);
@@ -1993,6 +1993,142 @@ List the angles in 1-2 sentences each. Be concise.`;
           };
         },
       }),
+
+      neural_read: tool({
+        description:
+          "Curate character material for the agent from a URL or a block of text (the 'family picks the books' path). Extracts candidate values/cultural patterns and stores them as PENDING for review — they do NOT influence the agent until you approve them with neural_adopt. Use this to deliberately teach the agent principles, worldview, or working norms from an article, essay, code-of-conduct, or your own written guidance. This is distinct from the Dreamer, which absorbs character passively from conversation.",
+        args: {
+          source: z.string().min(1).describe("A URL to fetch, or 'text' to indicate the material is passed inline via the text field."),
+          text: z.string().optional().describe("Inline material to extract from (used when source is not a fetchable URL)."),
+        },
+        async execute(args) {
+          let material = "";
+          const looksLikeUrl = /^https?:\/\//i.test(args.source.trim());
+          if (looksLikeUrl) {
+            try {
+              const res = await fetch(args.source.trim(), { redirect: "follow" });
+              if (!res.ok) return { title: "Fetch failed", output: `HTTP ${res.status} fetching ${args.source}` };
+              material = await res.text();
+              // Strip obvious HTML tags so the LLM sees prose, not markup.
+              material = material.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+            } catch (e) {
+              return { title: "Fetch error", output: `Could not fetch ${args.source}: ${(e as Error).message}` };
+            }
+          } else {
+            material = (args.text ?? args.source).trim();
+          }
+          if (material.length < 20) return { title: "Nothing to read", output: "Material too short to extract character traits from." };
+          material = material.slice(0, 12000);
+
+          const readPrompt = `Below is source material a user wants to use to shape an AI agent's character (its values, worldview, and working norms).
+Extract 0-8 durable character traits the material TEACHES or ENDORSES. For each emit one JSON object:
+{"type":"value"|"culture","layer":"worldview"|"cultural_norm"|"interpersonal_style"|"work_habit"|"surface_pref","trait":"<one neutral sentence describing the principle to adopt>","evidence":"<short quote/paraphrase from the material>","confidence":0.0-1.0}
+
+LAYER GUIDE (pick the SHALLOWER one when unsure):
+- worldview: fundamental beliefs about reality/self/others/morality.
+- cultural_norm: patterned expectations about how work/life/relationships should work (use type="culture").
+- interpersonal_style: how to communicate 1-on-1.
+- work_habit: task/execution patterns.
+- surface_pref: swappable preferences.
+
+RULES:
+- Extract ONLY principles the material actually advocates; cite the moment as evidence.
+- NEVER attribute a trait to a national/ethnic/religious group. Describe the PRINCIPLE, not a group.
+- Prefer fewer, higher-confidence, deeper-layer items.
+Return a JSON array. If nothing qualifies, return [].
+
+MATERIAL:
+${material}
+
+JSON:`;
+
+          const resp = await historianLlm.complete(readPrompt, { maxTokens: 900 });
+          if (!resp) return { title: "Extraction failed", output: "The extraction model returned no response." };
+          const m = resp.match(/\[[\s\S]*\]/);
+          if (!m) return { title: "No candidates", output: "No character traits could be extracted from the material." };
+          let items: any[] = [];
+          try { items = JSON.parse(m[0]); } catch { return { title: "Parse error", output: "Extraction model returned malformed JSON." }; }
+
+          const stored: { id: string; type: string; layer: string; trait: string; confidence: number }[] = [];
+          for (const it of items) {
+            if (stored.length >= 8) break;
+            if (!it || typeof it.trait !== "string") continue;
+            const trait = it.trait.trim();
+            if (trait.length < 15 || trait.length > 500) continue;
+            if (STEREOTYPE_RE.test(trait)) continue;
+            const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
+            const nodeType = it.type === "culture" ? "culture" : "value";
+            const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
+            const depth = LAYER_DEPTH[layer] ?? 0.15;
+            const node = await engine.remember(trait, nodeType as NodeType, {
+              importance: Math.min(0.95, 0.55 + 0.35 * depth),
+              metadata: {
+                characterData: {
+                  scope: "global",
+                  layer,
+                  observationCount: 1,
+                  confidence,
+                  source: "curated",
+                  reviewStatus: "pending",
+                  origin: looksLikeUrl ? args.source.trim() : "inline-text",
+                  evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "",
+                },
+              },
+            });
+            stored.push({ id: node.id, type: nodeType, layer, trait, confidence });
+          }
+
+          if (stored.length === 0) return { title: "No candidates", output: "No qualifying character traits found in the material." };
+          const list = stored
+            .map((s, i) => `${i + 1}. [${s.type}/${s.layer}] (conf=${s.confidence.toFixed(2)}) ${s.trait}\n   id=${s.id}`)
+            .join("\n");
+          return {
+            title: `${stored.length} pending trait${stored.length === 1 ? "" : "s"}`,
+            output: `Extracted ${stored.length} candidate trait(s), stored as PENDING (not yet influencing the agent). Review and approve with neural_adopt(ids=[...]) using the numbers or ids below:\n\n${list}`,
+            metadata: { count: stored.length, ids: stored.map((s) => s.id), status: "pending" },
+          };
+        },
+      }),
+
+      neural_adopt: tool({
+        description:
+          "Approve pending character traits created by neural_read so they start influencing the agent. Pass the ids (or leave empty to adopt ALL currently pending traits). Adopted traits join the same value/culture pool as passively-learned ones but are marked curated — they take effect immediately and bypass the corroboration gate because you vetted them.",
+        args: {
+          ids: z.array(z.string()).optional().describe("Node ids to adopt. If omitted, adopts all pending curated traits."),
+        },
+        async execute(args) {
+          const pending = [
+            ...(await storage.queryNodes({ type: "value" })),
+            ...(await storage.queryNodes({ type: "culture" })),
+          ].filter((n) => (n.metadata as any)?.characterData?.reviewStatus === "pending");
+
+          if (pending.length === 0) return { title: "Nothing pending", output: "There are no pending curated traits to adopt." };
+
+          const adoptAll = !args.ids || args.ids.length === 0;
+          const wanted = adoptAll ? null : new Set(args.ids);
+          const target = wanted ? pending.filter((n) => wanted.has(n.id)) : pending;
+          if (target.length === 0) return { title: "No match", output: `None of the given ids matched a pending trait. Pending ids: ${pending.map((n) => n.id).join(", ")}` };
+
+          const adopted: string[] = [];
+          for (const n of target) {
+            const cd = (n.metadata as any)?.characterData ?? {};
+            try {
+              await storage.putNode({
+                ...n,
+                lastAccessed: Date.now(),
+                metadata: { ...n.metadata, characterData: { ...cd, reviewStatus: "ready" } },
+              } as any);
+              adopted.push(n.content.slice(0, 80));
+            } catch {}
+          }
+          const remaining = pending.length - adopted.length;
+          return {
+            title: `Adopted ${adopted.length} trait${adopted.length === 1 ? "" : "s"}`,
+            output: `Now influencing the agent:\n${adopted.map((c, i) => `${i + 1}. ${c}`).join("\n")}${remaining > 0 ? `\n\n(${remaining} trait(s) still pending)` : ""}`,
+            metadata: { adopted: adopted.length, remaining },
+          };
+        },
+      }),
     },
 
     "experimental.chat.messages.transform": magicContextPresent
@@ -2907,6 +3043,9 @@ JSON:`;
           // corroboration (>=3 observations) before it influences behavior, to avoid
           // acting on a one-off remark as if it were a stable trait.
           const eligible = charNodes.filter((n) => {
+            const cd = (n.metadata as any)?.characterData ?? {};
+            if (cd.reviewStatus === "pending") return false;
+            if (cd.source === "curated") return true;
             const { observationCount } = characterMeta(n);
             return n.type === "culture" ? observationCount >= 3 : observationCount >= 1;
           });
