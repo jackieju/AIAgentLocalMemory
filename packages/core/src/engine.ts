@@ -55,8 +55,7 @@ const HUB_EDGE_THRESHOLD = 6;
 const KEYWORD_MATCH_RATIO = 0.25;
 const SEARCH_FALLBACK_LIMIT = 30;
 const DEFAULT_MAX_RESULTS = 20;
-const FTS_WEIGHT = 0.75;
-const ACTIVATION_WEIGHT = 0.25;
+const ACTIVATION_BOOST = 0.15;
 const SPREAD_SEED_LIMIT = 5;
 
 function tokenize(text: string): Set<string> {
@@ -234,15 +233,9 @@ export class NeuralContextEngine implements INeuralContextEngine {
       }
     }
 
-    const queryTokensLower = new Set(queryTokens.map((t) => t.toLowerCase()));
-    for (const node of ftsNodes) {
-      const nodeTokens = tokenize(node.content);
-      let overlap = 0;
-      for (const t of queryTokensLower) if (nodeTokens.has(t)) overlap++;
-      const overlapScore = overlap / queryTokensLower.size;
-      const existingFts = ftsScores.get(node.id) ?? 0;
-      ftsScores.set(node.id, existingFts * 0.6 + overlapScore * 0.4);
-    }
+    const poolRank = new Map<string, number>();
+    for (let i = 0; i < ftsNodes.length; i++) poolRank.set(ftsNodes[i].id, i);
+    const ftsPoolIds = new Set(ftsScores.keys());
 
     const wmBonus = new Map<string, number>();
     const wmIds = this.workingMemory.getAll();
@@ -257,6 +250,8 @@ export class NeuralContextEngine implements INeuralContextEngine {
           if (!ftsScores.has(node.id)) {
             ftsScores.set(node.id, 0.3);
             ftsNodes.push(node);
+            ftsPoolIds.add(node.id);
+            poolRank.set(node.id, poolRank.size);
           }
         }
       }
@@ -292,18 +287,32 @@ export class NeuralContextEngine implements INeuralContextEngine {
     for (const id of ftsScores.keys()) allNodeIds.add(id);
     for (const a of activations) allNodeIds.add(a.nodeId);
 
-    const hybridScores = new Map<string, number>();
+    const scores = new Map<string, number>();
+    const tierA: string[] = [];
+    const tierB: string[] = [];
     for (const id of allNodeIds) {
-      const fts = ftsScores.get(id) ?? 0;
       const act = activationScores.get(id) ?? 0;
       const wm = wmBonus.get(id) ?? 0;
-      hybridScores.set(id, FTS_WEIGHT * fts + ACTIVATION_WEIGHT * act + wm);
+      if (ftsPoolIds.has(id)) {
+        scores.set(id, (ftsScores.get(id) ?? 0) + ACTIVATION_BOOST * act + wm);
+        tierA.push(id);
+      } else {
+        scores.set(id, act + wm);
+        tierB.push(id);
+      }
     }
 
-    const sortedIds = [...hybridScores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, options.maxResults ?? DEFAULT_MAX_RESULTS)
-      .map(([id]) => id);
+    const byScore = (a: string, b: string) => {
+      const d = (scores.get(b) ?? 0) - (scores.get(a) ?? 0);
+      if (d !== 0) return d;
+      const pr = (poolRank.get(a) ?? Infinity) - (poolRank.get(b) ?? Infinity);
+      if (pr !== 0) return pr;
+      return a < b ? -1 : a > b ? 1 : 0;
+    };
+    tierA.sort(byScore);
+    tierB.sort(byScore);
+
+    const sortedIds = [...tierA, ...tierB].slice(0, options.maxResults ?? DEFAULT_MAX_RESULTS);
 
     const fetched = await this.config.storage.getNodesByIds(sortedIds);
     const nodeMap = new Map(fetched.map((n) => [n.id, n]));
@@ -315,7 +324,7 @@ export class NeuralContextEngine implements INeuralContextEngine {
       const activation = activations.find((a) => a.nodeId === id);
       results.push({
         node,
-        score: hybridScores.get(id) ?? 0,
+        score: scores.get(id) ?? 0,
         path: activation?.path,
       });
     }
