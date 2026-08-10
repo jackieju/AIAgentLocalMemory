@@ -7,7 +7,16 @@ export type NodeType =
   | "episode"      // Single message in conversation history
   | "meta"         // Hub node: consolidated summary of related nodes
   | "fact"         // Durable session/project fact (survives compression)
-  | "experience";  // Learned experience from server LLM consultation
+  | "experience"   // Learned experience from server LLM consultation
+  | "value"        // Value judgment / attitude toward people, explicitly revealed by the user (character nutrition)
+  | "culture";     // Culturally-patterned trait demonstrated by the user (individual pattern, never a group stereotype)
+
+export type CharacterLayer =
+  | "worldview"            // d=1.00: fundamental beliefs about reality/self/others/morality
+  | "cultural_norm"        // d=0.80: culturally-patterned expectations about how life/work/relationships should work
+  | "interpersonal_style"  // d=0.55: how the user communicates and relates 1-on-1
+  | "work_habit"           // d=0.35: task/execution patterns
+  | "surface_pref";        // d=0.15: swappable preferences
 
 export interface MemoryNode {
   id: string;

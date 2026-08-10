@@ -121,7 +121,57 @@ const NODE_TYPES: readonly NodeType[] = [
   "meta",
   "fact",
   "experience",
+  "value",
+  "culture",
 ] as const;
+
+const LAYER_DEPTH: Record<string, number> = {
+  worldview: 1.0,
+  cultural_norm: 0.8,
+  interpersonal_style: 0.55,
+  work_habit: 0.35,
+  surface_pref: 0.15,
+};
+const CHARACTER_LAYERS = new Set(Object.keys(LAYER_DEPTH));
+
+function characterMeta(node: any): { layer: string; observationCount: number; confidence: number } {
+  const cd = (node?.metadata?.characterData ?? {}) as Record<string, unknown>;
+  const layer = typeof cd.layer === "string" && CHARACTER_LAYERS.has(cd.layer) ? cd.layer : "surface_pref";
+  const observationCount = typeof cd.observationCount === "number" ? cd.observationCount : 1;
+  const confidence = typeof cd.confidence === "number" ? cd.confidence : 0.6;
+  return { layer, observationCount, confidence };
+}
+
+function injectionScore(node: any, now: number): number {
+  const { layer, observationCount, confidence } = characterMeta(node);
+  const d = LAYER_DEPTH[layer] ?? 0.15;
+  const importance = Math.max(0, Math.min(1, node?.importance ?? 0.5));
+  const strength = Math.max(0, Math.min(1, node?.strength ?? 0.5));
+  const trust = Math.min(1, observationCount / 3);
+  const daysSince = Math.max(0, (now - (node?.lastAccessed ?? node?.createdAt ?? now)) / 86400000);
+  const recency = Math.exp(-daysSince / 60);
+  return (
+    d *
+    importance *
+    (0.5 + 0.5 * strength) *
+    (0.4 + 0.6 * trust) *
+    (0.5 + 0.5 * recency) *
+    Math.max(0.1, Math.min(1, confidence))
+  );
+}
+
+const STEREOTYPE_RE = /\b(chinese|japanese|korean|american|indian|typical of|as a (chinese|japanese|korean|american|indian|western|eastern)|people from|people who are)\b/i;
+
+function tokenize(text: string): Set<string> {
+  return new Set(text.toLowerCase().split(/[\s\p{P}]+/u).filter((w) => w.length > 2));
+}
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersect = 0;
+  for (const w of a) if (b.has(w)) intersect++;
+  const union = a.size + b.size - intersect;
+  return union === 0 ? 0 : intersect / union;
+}
 
 function projectIdFromDir(dir: string): string {
   return createHash("sha256").update(dir).digest("hex").slice(0, 16);
@@ -169,7 +219,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const storage = new LoggedStorageProvider(rawStorage, opLog);
 
   const NODE_ALLOW_TYPES = new Set([
-    "episode", "fact", "concept", "assertion", "definition", "experience", "meta", "filler",
+    "episode", "fact", "concept", "assertion", "definition", "experience", "meta", "filler", "value", "culture",
   ]);
   async function safePutNode(node: any, opts?: { fromToolOutput?: boolean }): Promise<boolean> {
     try {
@@ -583,7 +633,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     // elapsed. The lock's mtime IS "last consolidated at"; its body holds the holder PID so a
     // dead holder's lock can be reclaimed. Cross-process safe.
     const DREAM_LOCK = join(dataBase, "ai-agent-local-memory", ".dream-lock");
-    const COOLDOWN_MS = 6 * 60 * 60 * 1000;
+    const COOLDOWN_MS = 24 * 60 * 60 * 1000; // daily consolidation, mirrors magic-context's nightly cron cadence
     const HOLDER_STALE_MS = 60 * 60 * 1000;
     let dreamerRunning = false;
 
@@ -625,6 +675,86 @@ JSON:`;
                 metadata: { factData: { scope: "global", activationFloor: 0.5, ready: true } },
               });
               existingFactContents.add(fact.toLowerCase());
+            }
+          }
+        }
+
+        const existingChar = [
+          ...(await storage.queryNodes({ type: "value" })),
+          ...(await storage.queryNodes({ type: "culture" })),
+        ];
+
+        const charPrompt = `Extract 0-5 character traits the user EXPLICITLY stated or unambiguously demonstrated in the conversation below.
+For each trait emit one JSON object:
+{"type":"value"|"culture","layer":"worldview"|"cultural_norm"|"interpersonal_style"|"work_habit"|"surface_pref","trait":"<one neutral sentence, no group stereotype>","evidence":"<quote or paraphrase of the exact moment>","confidence":0.0-1.0}
+
+LAYER GUIDE (pick the SHALLOWER one when unsure — never guess deeper):
+- worldview: fundamental beliefs about reality/self/others/morality (e.g. "believes honesty matters more than convenience").
+- cultural_norm: culturally-patterned expectations about how work/life/relationships should work (e.g. "prefers relationship and context before diving into the task"). Use type="culture" for these.
+- interpersonal_style: how the user communicates 1-on-1 (e.g. "wants full context before a conclusion").
+- work_habit: task/execution patterns (e.g. "verifies before reporting done").
+- surface_pref: swappable preferences (e.g. "prefers concise replies").
+
+RULES:
+- Extract ONLY what is explicitly stated or clearly demonstrated in THIS conversation.
+- If you cannot cite a specific moment as evidence, DO NOT emit the item.
+- NEVER attribute a trait to a national/ethnic/religious group. Describe THIS user only.
+- Max 5 items. Prefer fewer, higher-confidence items.
+Return a JSON array. If nothing qualifies, return [].
+
+CONVERSATION:
+${transcript}
+
+JSON:`;
+
+        const charResponse = await historianLlm.complete(charPrompt, { maxTokens: 600 });
+        if (charResponse) {
+          const cMatch = charResponse.match(/\[[\s\S]*\]/);
+          if (cMatch) {
+            let items: any[] = [];
+            try { items = JSON.parse(cMatch[0]); } catch { items = []; }
+            let emitted = 0;
+            for (const it of items) {
+              if (emitted >= 5) break;
+              if (!it || typeof it.trait !== "string") continue;
+              const trait = it.trait.trim();
+              if (trait.length < 15 || trait.length > 500) continue;
+              if (STEREOTYPE_RE.test(trait)) continue;
+              const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
+              const nodeType = it.type === "culture" ? "culture" : "value";
+              const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
+
+              const existing = existingChar.find(
+                e => jaccard(tokenize(e.content), tokenize(trait)) >= 0.6,
+              );
+              if (existing) {
+                const cd = (existing.metadata?.characterData ?? {}) as Record<string, unknown>;
+                const obs = (typeof cd.observationCount === "number" ? cd.observationCount : 1) + 1;
+                const newImportance = Math.min(0.95, (existing.importance ?? 0.6) + 0.05);
+                try {
+                  await storage.putNode({
+                    ...existing,
+                    importance: newImportance,
+                    strength: Math.min(1, (existing.strength ?? 0.5) + 0.1),
+                    lastAccessed: Date.now(),
+                    metadata: {
+                      ...existing.metadata,
+                      characterData: { ...cd, layer: cd.layer ?? layer, observationCount: obs, confidence: Math.max(Number(cd.confidence) || confidence, confidence) },
+                    },
+                  } as any);
+                } catch {}
+                continue;
+              }
+
+              const depth = LAYER_DEPTH[layer] ?? 0.15;
+              await engine.remember(trait, nodeType, {
+                importance: Math.min(0.95, 0.55 + 0.35 * depth),
+                metadata: {
+                  characterData: { scope: "global", layer, observationCount: 1, confidence, evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "" },
+                },
+              });
+              existingChar.push({ id: "pending", type: nodeType, content: trait, importance: 0.6, strength: 0.5, accessCount: 0, lastAccessed: Date.now(), createdAt: Date.now(), metadata: { characterData: { layer, observationCount: 1, confidence } } } as any);
+              emitted++;
             }
           }
         }
@@ -2765,6 +2895,53 @@ JSON:`;
             blocks.push(`  <memory id="${f.id.slice(0, 8)}" category="${fd?.scope ?? "global"}">${f.content}</memory>`);
           }
           blocks.push("</project-memory>");
+        }
+
+        const charNodes = [
+          ...(await storage.queryNodes({ type: "value" })),
+          ...(await storage.queryNodes({ type: "culture" })),
+        ];
+        if (charNodes.length > 0) {
+          const nowChar = Date.now();
+          // Trust gate: value nodes surface once observed; culture (group-patterned) needs
+          // corroboration (>=3 observations) before it influences behavior, to avoid
+          // acting on a one-off remark as if it were a stable trait.
+          const eligible = charNodes.filter((n) => {
+            const { observationCount } = characterMeta(n);
+            return n.type === "culture" ? observationCount >= 3 : observationCount >= 1;
+          });
+          // Per-layer caps: deeper layers get more slots (they define who the agent is);
+          // surface prefs are capped tight so they don't crowd out worldview.
+          const LAYER_CAP: Record<string, number> = {
+            worldview: 5,
+            cultural_norm: 4,
+            interpersonal_style: 3,
+            work_habit: 3,
+            surface_pref: 2,
+          };
+          const perLayer: Record<string, number> = {};
+          const ranked = eligible
+            .slice()
+            .sort((a, b) => injectionScore(b, nowChar) - injectionScore(a, nowChar))
+            .filter((n) => {
+              const { layer } = characterMeta(n);
+              const used = perLayer[layer] ?? 0;
+              if (used >= (LAYER_CAP[layer] ?? 2)) return false;
+              perLayer[layer] = used + 1;
+              return true;
+            })
+            .slice(0, 14);
+          if (ranked.length > 0) {
+            blocks.push("");
+            blocks.push("<user-character>");
+            blocks.push("Values, attitudes, and behavioral patterns the user has revealed over time. Act consistently with these; they define who this agent is working for and how. Deeper layers (worldview, cultural_norm) outrank surface preferences when they conflict.");
+            for (const n of ranked) {
+              const { layer } = characterMeta(n);
+              const tag = n.type === "culture" ? "pattern" : "value";
+              blocks.push(`  <${tag} id="${n.id.slice(0, 8)}" layer="${layer}">${n.content}</${tag}>`);
+            }
+            blocks.push("</user-character>");
+          }
         }
 
         const experiences = await storage.queryNodes({ type: "experience" as any });
