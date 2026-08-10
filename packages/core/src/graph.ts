@@ -96,9 +96,10 @@ export class NeuralGraph {
       const frontierIds = [...frontier];
       const edges = await this.storage.getEdgesBatch(frontierIds, "both");
 
-      // Per-hop attenuation: multiplier = hopDecay ^ (hop + 1)
       const hopMultiplier = Math.pow(hopDecay, hop + 1);
       const nextFrontier = new Set<string>();
+
+      const sourceScoreSnapshot = new Map(activation);
 
       for (const edge of edges) {
         let sourceId: string;
@@ -113,8 +114,7 @@ export class NeuralGraph {
           continue;
         }
 
-        const currentScore = activation.get(sourceId) ?? 0;
-        // transmitted = currentScore × edge.weight × hopMultiplier
+        const currentScore = sourceScoreSnapshot.get(sourceId) ?? 0;
         const transmitted = currentScore * edge.weight * hopMultiplier;
         if (transmitted < threshold) continue;
 
@@ -144,7 +144,11 @@ export class NeuralGraph {
         path: paths.get(nodeId) ?? [nodeId],
       });
     }
-    results.sort((a, b) => b.score - a.score);
+    results.sort((a, b) => {
+      const d = b.score - a.score;
+      if (d !== 0) return d;
+      return a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0;
+    });
     return results;
   }
 

@@ -440,13 +440,13 @@ export class SqliteStorageProvider implements StorageProvider {
     let sql: string;
     let params: unknown[];
     if (direction === 'out') {
-      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE src IN (${placeholders})`;
+      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE src IN (${placeholders}) ORDER BY src, dst`;
       params = nodeIds;
     } else if (direction === 'in') {
-      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE dst IN (${placeholders})`;
+      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE dst IN (${placeholders}) ORDER BY src, dst`;
       params = nodeIds;
     } else {
-      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE src IN (${placeholders}) OR dst IN (${placeholders})`;
+      sql = `SELECT ${EDGE_COLS} FROM synapses WHERE src IN (${placeholders}) OR dst IN (${placeholders}) ORDER BY src, dst`;
       params = [...nodeIds, ...nodeIds];
     }
 
