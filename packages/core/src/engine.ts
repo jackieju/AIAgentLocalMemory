@@ -57,7 +57,7 @@ const SEARCH_FALLBACK_LIMIT = 30;
 const DEFAULT_MAX_RESULTS = 20;
 const ACTIVATION_BOOST = process.env.NEURAL_ACTIVATION_BOOST
   ? Number(process.env.NEURAL_ACTIVATION_BOOST)
-  : 0.15;
+  : 0.1;
 const SPREAD_SEED_LIMIT = 5;
 
 function tokenize(text: string): Set<string> {
