@@ -476,14 +476,9 @@ export class SqliteStorageProvider implements StorageProvider {
 
     if (rows.length === 0) return [];
 
-    const ranks = rows.map(r => r.rank);
-    const bestRank = Math.min(...ranks);
-    const worstRank = Math.max(...ranks);
-    const range = worstRank - bestRank || 1;
-
     return rows.map((row) => ({
       node: rowToNode(row),
-      score: 1 - (row.rank - bestRank) / range,
+      score: 1 / (1 + Math.exp(row.rank / 2)),
     }));
   }
 
