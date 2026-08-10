@@ -179,7 +179,7 @@ export class AIAgentLocalAdapter implements MemoryAdapter {
   async warmup(queries: string[]): Promise<void> {
     if (!this.engine) throw new Error("not initialized");
     for (const q of queries) {
-      await this.engine.recall(q, { maxResults: 10 });
+      await this.engine.recall(q, { maxResults: 10, readOnly: true });
     }
   }
 
@@ -188,7 +188,7 @@ export class AIAgentLocalAdapter implements MemoryAdapter {
     k: number,
   ): Promise<Array<{ id: string; score: number; content: string }>> {
     if (!this.engine) throw new Error("not initialized");
-    const results = await this.engine.recall(query, { maxResults: k });
+    const results = await this.engine.recall(query, { maxResults: k, readOnly: true });
     const hits: Array<{ id: string; score: number; content: string }> = [];
     for (const r of results) {
       const datasetId =

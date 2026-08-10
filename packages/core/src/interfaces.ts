@@ -71,6 +71,7 @@ export interface RecallOptions {
   threshold?: number;        // Minimum activation to include, default: 0.08
   includeTypes?: NodeType[]; // Filter by node type
   excludeTypes?: NodeType[]; // Exclude node types
+  readOnly?: boolean;        // Skip side effects (Hebbian coactivate, WM/cache mutation). Default: false
 }
 
 export interface RecallResult {

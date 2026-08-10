@@ -55,7 +55,9 @@ const HUB_EDGE_THRESHOLD = 6;
 const KEYWORD_MATCH_RATIO = 0.25;
 const SEARCH_FALLBACK_LIMIT = 30;
 const DEFAULT_MAX_RESULTS = 20;
-const ACTIVATION_BOOST = 0.15;
+const ACTIVATION_BOOST = process.env.NEURAL_ACTIVATION_BOOST
+  ? Number(process.env.NEURAL_ACTIVATION_BOOST)
+  : 0.15;
 const SPREAD_SEED_LIMIT = 5;
 
 function tokenize(text: string): Set<string> {
@@ -340,11 +342,13 @@ export class NeuralContextEngine implements INeuralContextEngine {
 
     results = results.slice(0, options.maxResults ?? DEFAULT_MAX_RESULTS);
 
-    const resultIds = results.map((r) => r.node.id);
-    await this.hebbian.coactivate(this.config.storage, resultIds);
-    for (const r of results) {
-      this.workingMemory.access(r.node.id);
-      this.nodeCache.set(r.node.id, r.node);
+    if (!options.readOnly) {
+      const resultIds = results.map((r) => r.node.id);
+      await this.hebbian.coactivate(this.config.storage, resultIds);
+      for (const r of results) {
+        this.workingMemory.access(r.node.id);
+        this.nodeCache.set(r.node.id, r.node);
+      }
     }
 
     return results;

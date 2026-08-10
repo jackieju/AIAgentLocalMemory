@@ -255,7 +255,7 @@ export class SqliteStorageProvider implements StorageProvider {
       FROM nodes_fts f
       JOIN nodes n ON n.rowid = f.rowid
       WHERE nodes_fts MATCH ?
-      ORDER BY rank
+      ORDER BY rank, n.id
       LIMIT ?
     `);
 
@@ -470,7 +470,7 @@ export class SqliteStorageProvider implements StorageProvider {
       FROM nodes_fts f
       JOIN nodes n ON n.rowid = f.rowid
       WHERE nodes_fts MATCH ?
-      ORDER BY rank
+      ORDER BY rank, n.id
       LIMIT ?
     `).all(ftsQuery, limit) as (NodeRow & { rank: number })[];
 
