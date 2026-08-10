@@ -70,6 +70,13 @@ interface PluginConfig {
       cotStrategy?: "thinking-tag" | "post-rewrite" | "none";
     };
   };
+  // When the session goes idle, the agent may proactively ask the user for
+  // learning material to feed into neural_read ("agent asks to read a book").
+  idleReadingPrompt?: {
+    enabled?: boolean;      // default true — set false to fully opt out
+    minIntervalMs?: number; // min gap between prompts per session (default 1h)
+    maxPerDay?: number;     // per-session daily cap (default 3)
+  };
 }
 
 function loadConfig(directory: string): PluginConfig {
@@ -3265,6 +3272,59 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
                 db.close();
               }
             }
+          }
+        } catch {}
+
+        try {
+          const cfg = pluginConfig.idleReadingPrompt;
+          if (cfg?.enabled !== false) {
+            const minInterval = cfg?.minIntervalMs ?? 60 * 60 * 1000;
+            const maxPerDay = cfg?.maxPerDay ?? 3;
+            const stateFile = join(dataBase, "ai-agent-local-memory", ".idle-reading-state.json");
+            let state: Record<string, { last: number; day: string; count: number; snoozeUntil?: number; disabled?: boolean }> = {};
+            try { if (existsSync(stateFile)) state = JSON.parse(readFileSync(stateFile, "utf-8")); } catch {}
+
+            const now = Date.now();
+            const today = new Date().toISOString().slice(0, 10);
+            const s = state[sid] ?? { last: 0, day: today, count: 0 };
+            if (s.day !== today) { s.day = today; s.count = 0; }
+
+            let lastUserText = "";
+            for (let i = (msgsResult.data ?? []).length - 1; i >= 0; i--) {
+              const m = msgsResult.data![i];
+              if (m.info.role !== "user") continue;
+              lastUserText = ((m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ")).trim();
+              break;
+            }
+            if (/永久关闭读书|以后别再问|不要再问我读书|permanently stop asking/i.test(lastUserText)) {
+              s.disabled = true;
+            } else if (/今天别再问|24小时内不要问|暂停读书|snooze reading/i.test(lastUserText)) {
+              s.snoozeUntil = now + 24 * 60 * 60 * 1000;
+            }
+
+            const snoozed = s.snoozeUntil !== undefined && now < s.snoozeUntil;
+            const throttled = s.disabled || snoozed || now - s.last < minInterval || s.count >= maxPerDay;
+            if (!throttled) {
+              const askText =
+                "我想多学点东西来更好地帮你。你有没有想让我读的材料——文章链接、一段文字、你的工作准则或经验之谈？发给我，我用 neural_read 把它内化成我的价值观和做事方式。\n（不想被打扰？回复「今天别再问」静默 24 小时，或回复「永久关闭读书」彻底关掉。）";
+
+              if (Math.random() < 0.5) {
+                try { await (client as any).tui?.showToast?.({ body: { message: askText, variant: "info" } }); } catch {}
+              } else {
+                try {
+                  await client.session.promptAsync({
+                    path: { id: sid },
+                    body: { parts: [{ type: "text", text: `[system] ${askText}` }] },
+                  });
+                } catch {}
+              }
+
+              s.last = now;
+              s.count += 1;
+            }
+            state[sid] = s;
+            mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+            try { writeFileSync(stateFile, JSON.stringify(state)); } catch {}
           }
         } catch {}
 
