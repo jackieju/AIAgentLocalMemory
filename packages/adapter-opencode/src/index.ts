@@ -43,6 +43,7 @@ interface PluginConfig {
   coexistWithOtherContextManager?: boolean;
   syncRepo?: string;
   recallStrategy?: "plugin" | "llm";
+  readExtractBackend?: "server" | "local";
   llm?: {
     provider: "openai" | "ollama" | "custom";
     baseUrl?: string;
@@ -1089,12 +1090,36 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
     },
 
     "chat.message": async (input: any, output: any) => {
+      // Fires the instant the user hits Enter, independent of messages.transform.
+      // If transform later hangs, OpenCode may never persist the message and the
+      // plugin's graph-ingestion (inside transform's async tail) never runs — the
+      // message is lost. MUST stay synchronous with no LLM/DB/network so this path
+      // cannot hang or block the main session.
       try {
-        if (!process.env.NEURAL_REPLAY_ORIG_SESSION_ID) return;
         const parts = output?.parts ?? [];
-        const text = parts.filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n").trim();
-        if (!text || text.length < 5) return;
-        (globalThis as any).__neuralReplayLastUserMsg = { text, ts: Date.now() };
+        const text = parts
+          .filter((p: any) => p.type === "text")
+          .map((p: any) => p.text ?? "")
+          .join("\n")
+          .trim();
+        if (text && text.length >= 1) {
+          (globalThis as any).__neuralMainBusyAt = Date.now();
+          const sid =
+            output?.message?.sessionID ??
+            output?.info?.sessionID ??
+            input?.message?.sessionID ??
+            input?.sessionID ??
+            "unknown";
+          try {
+            const pendingDir = join(dataBase, "ai-agent-local-memory", "pending-messages");
+            mkdirSync(pendingDir, { recursive: true });
+            const line = JSON.stringify({ ts: Date.now(), sid, role: "user", text: text.slice(0, 8000) }) + "\n";
+            appendFileSync(join(pendingDir, `${sid}.log`), line);
+          } catch {}
+        }
+        if (process.env.NEURAL_REPLAY_ORIG_SESSION_ID && text && text.length >= 5) {
+          (globalThis as any).__neuralReplayLastUserMsg = { text, ts: Date.now() };
+        }
       } catch {}
     },
 
@@ -1138,6 +1163,10 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
     // instead of running for real. Requires the fork of opencode with the
     // tool.execute.before shortcircuit hook (branch replay-shortcircuit).
     "tool.execute.before": async (input: any, output: any) => {
+      try {
+        const tn = String(input?.tool ?? "");
+        if (tn && !tn.startsWith("neural_")) (globalThis as any).__neuralMainBusyAt = Date.now();
+      } catch {}
       try {
         const origSid = process.env.NEURAL_REPLAY_ORIG_SESSION_ID;
         if (!origSid) return;
@@ -2049,53 +2078,128 @@ ${material}
 
 JSON:`;
 
-          const resp = await historianLlm.complete(readPrompt, { maxTokens: 900 });
-          if (!resp) return { title: "Extraction failed", output: "The extraction model returned no response." };
-          const m = resp.match(/\[[\s\S]*\]/);
-          if (!m) return { title: "No candidates", output: "No character traits could be extracted from the material." };
-          let items: any[] = [];
-          try { items = JSON.parse(m[0]); } catch { return { title: "Parse error", output: "Extraction model returned malformed JSON." }; }
-
-          const stored: { id: string; type: string; layer: string; trait: string; confidence: number }[] = [];
-          for (const it of items) {
-            if (stored.length >= 8) break;
-            if (!it || typeof it.trait !== "string") continue;
-            const trait = it.trait.trim();
-            if (trait.length < 15 || trait.length > 500) continue;
-            if (STEREOTYPE_RE.test(trait)) continue;
-            const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
-            const nodeType = it.type === "culture" ? "culture" : "value";
-            const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
-            const depth = LAYER_DEPTH[layer] ?? 0.15;
-            const node = await engine.remember(trait, nodeType as NodeType, {
-              importance: Math.min(0.95, 0.55 + 0.35 * depth),
-              metadata: {
-                characterData: {
-                  scope: "global",
-                  layer,
-                  observationCount: 1,
-                  confidence,
-                  source: "curated",
-                  reviewStatus: "pending",
-                  origin: looksLikeUrl ? args.source.trim() : "inline-text",
-                  evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "",
+          const storeTraits = async (items: any[]): Promise<{ id: string; type: string; layer: string; trait: string; confidence: number }[]> => {
+            const out: { id: string; type: string; layer: string; trait: string; confidence: number }[] = [];
+            for (const it of items) {
+              if (out.length >= 8) break;
+              if (!it || typeof it.trait !== "string") continue;
+              const trait = it.trait.trim();
+              if (trait.length < 15 || trait.length > 500) continue;
+              if (STEREOTYPE_RE.test(trait)) continue;
+              const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
+              const nodeType = it.type === "culture" ? "culture" : "value";
+              const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
+              const depth = LAYER_DEPTH[layer] ?? 0.15;
+              const node = await engine.remember(trait, nodeType as NodeType, {
+                importance: Math.min(0.95, 0.55 + 0.35 * depth),
+                metadata: {
+                  characterData: {
+                    scope: "global",
+                    layer,
+                    observationCount: 1,
+                    confidence,
+                    source: "curated",
+                    reviewStatus: "pending",
+                    origin: looksLikeUrl ? args.source.trim() : "inline-text",
+                    evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "",
+                  },
                 },
-              },
-            });
-            stored.push({ id: node.id, type: nodeType, layer, trait, confidence });
+              });
+              out.push({ id: node.id, type: nodeType, layer, trait, confidence });
+            }
+            return out;
+          };
+
+          // Salvage complete {...} objects from possibly-truncated JSON so a
+          // reading interrupted mid-stream still yields whatever was extracted.
+          const salvageItems = (raw: string): any[] => {
+            const arr = raw.match(/\[[\s\S]*\]/);
+            if (arr) { try { return JSON.parse(arr[0]); } catch {} }
+            const objs: any[] = [];
+            let depth = 0, start = -1;
+            for (let i = 0; i < raw.length; i++) {
+              const ch = raw[i];
+              if (ch === "{") { if (depth === 0) start = i; depth++; }
+              else if (ch === "}") { depth--; if (depth === 0 && start >= 0) { try { objs.push(JSON.parse(raw.slice(start, i + 1))); } catch {} start = -1; } }
+            }
+            return objs;
+          };
+
+          const backend = pluginConfig.readExtractBackend ?? "server";
+
+          if (backend === "local") {
+            const resp = await historianLlm.complete(readPrompt, { maxTokens: 900 });
+            if (!resp) return { title: "Extraction failed", output: "The extraction model returned no response." };
+            const items = salvageItems(resp);
+            if (items.length === 0) return { title: "No candidates", output: "No character traits could be extracted from the material." };
+            const stored = await storeTraits(items);
+            if (stored.length === 0) return { title: "No candidates", output: "No qualifying character traits found in the material." };
+            const list = stored
+              .map((s, i) => `${i + 1}. [${s.type}/${s.layer}] (conf=${s.confidence.toFixed(2)}) ${s.trait}\n   id=${s.id}`)
+              .join("\n");
+            return {
+              title: `${stored.length} pending trait${stored.length === 1 ? "" : "s"}`,
+              output: `Extracted ${stored.length} candidate trait(s), stored as PENDING. Approve with neural_adopt(ids=[...]):\n\n${list}`,
+              metadata: { count: stored.length, ids: stored.map((s) => s.id), status: "pending" },
+            };
           }
 
-          if (stored.length === 0) return { title: "No candidates", output: "No qualifying character traits found in the material." };
-          const list = stored
-            .map((s, i) => `${i + 1}. [${s.type}/${s.layer}] (conf=${s.confidence.toFixed(2)}) ${s.trait}\n   id=${s.id}`)
-            .join("\n");
+          // Default "server" backend: read via a detached sub-session on the main
+          // model, polling every 1.5s. Yields the moment the main session gets
+          // fresh user input or other work (__neuralMainBusyAt), saving whatever
+          // was extracted so far. Fire-and-forget — never blocks the main session.
+          const readStartTs = Date.now();
+          (async () => {
+            let childId: string | undefined;
+            let bestText = "";
+            let interrupted = false;
+            const notify = (msg: string) => { try { writeFileSync("/tmp/neural-read-result.txt", `${new Date().toISOString()} ${msg}\n`); } catch {} };
+            try {
+              const child = await client.session.create({ body: { system: "You extract durable character traits as a JSON array. Return ONLY the JSON array, nothing else." } });
+              childId = child.data?.id;
+              if (!childId) { notify("neural_read: failed to create sub-session"); return; }
+              await client.session.promptAsync({ path: { id: childId }, body: { parts: [{ type: "text", text: readPrompt }] } });
+
+              const MAX_WAIT_MS = 120000;
+              const POLL_MS = 1500;
+              const deadline = readStartTs + MAX_WAIT_MS;
+              while (Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, POLL_MS));
+                const busyAt = (globalThis as any).__neuralMainBusyAt ?? 0;
+                if (busyAt > readStartTs) { interrupted = true; break; }
+                const msgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+                let text = "";
+                for (const msg of (msgs.data ?? [])) {
+                  if (msg.info?.role !== "assistant") continue;
+                  text = (msg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join("\n");
+                  break;
+                }
+                if (text) bestText = text;
+                if (bestText && /\]\s*$/.test(bestText.trim())) break;
+              }
+            } catch (e) {
+              notify(`neural_read: error ${(e as Error)?.message ?? e}`);
+            } finally {
+              if (childId) { try { await client.session.delete({ path: { id: childId } }); } catch {} }
+            }
+            try {
+              const items = salvageItems(bestText);
+              const stored = await storeTraits(items);
+              const tag = interrupted ? "interrupted" : "done";
+              notify(`neural_read ${tag}: ${stored.length} pending trait(s) saved. Approve with neural_adopt. ids=${JSON.stringify(stored.map((s) => s.id))}`);
+            } catch (e) {
+              notify(`neural_read: store error ${(e as Error)?.message ?? e}`);
+            }
+          })();
+
           return {
-            title: `${stored.length} pending trait${stored.length === 1 ? "" : "s"}`,
-            output: `Extracted ${stored.length} candidate trait(s), stored as PENDING (not yet influencing the agent). Review and approve with neural_adopt(ids=[...]) using the numbers or ids below:\n\n${list}`,
-            metadata: { count: stored.length, ids: stored.map((s) => s.id), status: "pending" },
+            title: "Reading in background",
+            output: "Started reading the material in the background on the main model. It will yield immediately if you type or the session gets busy, and whatever was extracted is saved as PENDING traits. Check /tmp/neural-read-result.txt for the outcome, then approve with neural_adopt.",
+            metadata: { status: "background", backend: "server" },
           };
         },
       }),
+
 
       neural_adopt: tool({
         description:
