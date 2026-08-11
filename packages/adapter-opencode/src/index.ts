@@ -2663,11 +2663,70 @@ JSON:`;
             }
           }
 
+          // Orphan tool_result sweep (Pass A/B/C). Anthropic returns a pre-stream 400
+          // ("tool_result block(s) provided when previous message does not contain
+          // tool_use blocks") if a rendered user message carries a tool_result whose
+          // matching assistant tool_use was dropped by tail-cut or dedup. That 400
+          // arrives before any SSE frame, so opencode clears the input and renders
+          // nothing — the "message vanishes, zero reaction" bug on reloaded old sessions.
+          // Fix pairs by id, never by position. (Oracle-designed pass.)
+          {
+            // Pass A: collect every live tool_use id in the window. This build models
+            // tool calls two ways in the same array: DB-shaped { type:"tool", callID }
+            // and Anthropic-shaped { type:"tool_call", ... }. tool_result parts pair via
+            // snake_case `tool_use_id`. Collect ALL of them or the sweep deletes valid
+            // results. (part.id is the row id prt_xxx — NOT a tool_use id; do not use it.)
+            const liveToolUseIds = new Set<string>();
+            let toolCallPartCount = 0;
+            for (const m of rendered) {
+              if (m.info?.role !== "assistant" && m.info?.role !== "tool") continue;
+              for (const p of (m.parts ?? []) as any[]) {
+                if (p?.type === "tool") {
+                  toolCallPartCount++;
+                  if (typeof p.callID === "string") liveToolUseIds.add(p.callID);
+                  else if (typeof p.tool_use_id === "string") liveToolUseIds.add(p.tool_use_id);
+                  else if (typeof p.id === "string" && p.id.startsWith("toolu")) liveToolUseIds.add(p.id);
+                } else if (p?.type === "tool_call") {
+                  toolCallPartCount++;
+                  if (typeof p.callID === "string") liveToolUseIds.add(p.callID);
+                  else if (typeof p.tool_use_id === "string") liveToolUseIds.add(p.tool_use_id);
+                  else if (typeof p.id === "string" && p.id.startsWith("toolu")) liveToolUseIds.add(p.id);
+                }
+              }
+            }
+
+            // Pass B: drop any tool_result whose tool_use_id is not in the live set.
+            // Pair by id, never by position.
+            for (const m of rendered) {
+              if (m.info?.role !== "user") continue;
+              m.parts = ((m.parts ?? []) as any[]).filter(
+                (p) => p?.type !== "tool_result" || (typeof p.tool_use_id === "string" && liveToolUseIds.has(p.tool_use_id))
+              );
+            }
+
+            // Pass C: remove user messages emptied by Pass B. Keep non-user messages
+            // and any user message that still has parts. If everything collapsed, the
+            // Pass D fixup below will re-inject a sentinel.
+            for (let i = rendered.length - 1; i >= 0; i--) {
+              const m = rendered[i];
+              if (m.info?.role === "user" && (m.parts?.length ?? 0) === 0) rendered.splice(i, 1);
+            }
+
+            try {
+              const orphanRemaining = rendered.length > 0
+                ? ((rendered[0].parts ?? []) as any[]).some((p) => p?.type === "tool_result")
+                : false;
+              writeFileSync(`/tmp/neural-orphan-sweep-${openCodeSessionId}.log`,
+                `${new Date().toISOString()} liveIds=${liveToolUseIds.size} toolCallParts=${toolCallPartCount} renderedAfter=${rendered.length} head0StillToolResult=${orphanRemaining}\n`,
+                { flag: "a" as any });
+            } catch {}
+          }
+
           // Anthropic rejects a conversation that ends in an assistant-prefill position:
           // "must end with a user message". A trailing user turn whose ONLY parts are
           // tool_result blocks (a tool answered, awaiting the assistant) IS such a state,
           // as is a trailing assistant turn or one of our emptied dedup stubs. Normalize
-          // the boundary in place before splicing back. (Oracle-designed pass.)
+          // the boundary in place before splicing back. (Oracle-designed Pass D.)
           {
             const SENTINEL = () => ({ type: "text", text: "Please continue." });
             const isToolResult = (p: any) => p?.type === "tool_result";
@@ -3308,16 +3367,31 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
               const askText =
                 "我想多学点东西来更好地帮你。你有没有想让我读的材料——文章链接、一段文字、你的工作准则或经验之谈？发给我，我用 neural_read 把它内化成我的价值观和做事方式。\n（不想被打扰？回复「今天别再问」静默 24 小时，或回复「永久关闭读书」彻底关掉。）";
 
-              if (Math.random() < 0.5) {
-                try { await (client as any).tui?.showToast?.({ body: { message: askText, variant: "info" } }); } catch {}
-              } else {
+              // Only fire after a quiet grace period, and re-confirm the session is
+              // still idle at fire time. If opencode resumed work (new messages
+              // arrived, i.e. thinking / tool calls / replying) since we scheduled
+              // this timer, skip — never interrupt active work.
+              const graceMs = 30 * 1000;
+              const scheduledMsgCount = (msgsResult.data ?? []).length;
+              setTimeout(async () => {
                 try {
-                  await client.session.promptAsync({
-                    path: { id: sid },
-                    body: { parts: [{ type: "text", text: `[system] ${askText}` }] },
-                  });
-                } catch {}
-              }
+                  // Re-check: has the session produced new messages since scheduling?
+                  const check = await client.session.messages({ path: { id: sid } });
+                  const currentCount = (check.data ?? []).length;
+                  if (currentCount !== scheduledMsgCount) return; // session became busy again
+                } catch { return; }
+
+                if (Math.random() < 0.5) {
+                  try { await (client as any).tui?.showToast?.({ body: { message: askText, variant: "info" } }); } catch {}
+                } else {
+                  try {
+                    await client.session.promptAsync({
+                      path: { id: sid },
+                      body: { parts: [{ type: "text", text: `[system] ${askText}` }] },
+                    });
+                  } catch {}
+                }
+              }, graceMs);
 
               s.last = now;
               s.count += 1;
