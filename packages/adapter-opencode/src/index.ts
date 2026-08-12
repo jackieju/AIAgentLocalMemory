@@ -408,6 +408,144 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     : null;
   let historianTurnCount = 0;
 
+  // ---- Shared neural_read runner --------------------------------------------
+  // Extracts durable character traits from `material` via a detached sub-session
+  // on the main model, polling every 1.5s. Yields the moment the main session
+  // gets fresh user input or other work (__neuralMainBusyAt) and saves whatever
+  // was extracted so far. Used by BOTH the neural_read tool and the idle
+  // "resume the unfinished book" path so there is exactly one code path.
+  //
+  // On interrupt it persists the FULL material+origin into .reading-state.json
+  // so the idle branch can pick the same book back up later. On completion it
+  // clears the material so we never re-read a finished book.
+  const NEURAL_READ_PROMPT_HEAD = `Below is source material a user wants to use to shape an AI agent's character (its values, worldview, and working norms).
+Extract 0-8 durable character traits the material TEACHES or ENDORSES. For each emit one JSON object:
+{"type":"value"|"culture","layer":"worldview"|"cultural_norm"|"interpersonal_style"|"work_habit"|"surface_pref","trait":"<one neutral sentence describing the principle to adopt>","evidence":"<short quote/paraphrase from the material>","confidence":0.0-1.0}
+
+LAYER GUIDE (pick the SHALLOWER one when unsure):
+- worldview: fundamental beliefs about reality/self/others/morality.
+- cultural_norm: patterned expectations about how work/life/relationships should work (use type="culture").
+- interpersonal_style: how to communicate 1-on-1.
+- work_habit: task/execution patterns.
+- surface_pref: swappable preferences.
+
+RULES:
+- Extract ONLY principles the material actually advocates; cite the moment as evidence.
+- NEVER attribute a trait to a national/ethnic/religious group. Describe the PRINCIPLE, not a group.
+- Prefer fewer, higher-confidence, deeper-layer items.
+Return a JSON array. If nothing qualifies, return [].`;
+
+  const readingStatePath = () => join(dataBase, "ai-agent-local-memory", ".reading-state.json");
+
+  const salvageReadItems = (raw: string): any[] => {
+    const arr = raw.match(/\[[\s\S]*\]/);
+    if (arr) { try { return JSON.parse(arr[0]); } catch {} }
+    const objs: any[] = [];
+    let depth = 0, start = -1;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (ch === "{") { if (depth === 0) start = i; depth++; }
+      else if (ch === "}") { depth--; if (depth === 0 && start >= 0) { try { objs.push(JSON.parse(raw.slice(start, i + 1))); } catch {} start = -1; } }
+    }
+    return objs;
+  };
+
+  const storeReadTraits = async (
+    items: any[],
+    origin: string,
+  ): Promise<{ id: string; type: string; layer: string; trait: string; confidence: number }[]> => {
+    const out: { id: string; type: string; layer: string; trait: string; confidence: number }[] = [];
+    for (const it of items) {
+      if (out.length >= 8) break;
+      if (!it || typeof it.trait !== "string") continue;
+      const trait = it.trait.trim();
+      if (trait.length < 15 || trait.length > 500) continue;
+      if (STEREOTYPE_RE.test(trait)) continue;
+      const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
+      const nodeType = it.type === "culture" ? "culture" : "value";
+      const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
+      const depth = LAYER_DEPTH[layer] ?? 0.15;
+      const node = await engine.remember(trait, nodeType as NodeType, {
+        importance: Math.min(0.95, 0.55 + 0.35 * depth),
+        metadata: {
+          characterData: {
+            scope: "global",
+            layer,
+            observationCount: 1,
+            confidence,
+            source: "curated",
+            reviewStatus: "pending",
+            origin,
+            evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "",
+          },
+        },
+      });
+      out.push({ id: node.id, type: nodeType, layer, trait, confidence });
+    }
+    return out;
+  };
+
+  // Fire-and-forget detached read. `material` is already fetched/truncated prose;
+  // `origin` is the URL or "inline-text". Never blocks the caller.
+  const runNeuralReadServer = (material: string, origin: string): void => {
+    const readPrompt = `${NEURAL_READ_PROMPT_HEAD}\n\nMATERIAL:\n${material}\n\nJSON:`;
+    const readStartTs = Date.now();
+    (globalThis as any).__neuralReadInFlight = true;
+    (async () => {
+      let childId: string | undefined;
+      let bestText = "";
+      let interrupted = false;
+      const notify = (msg: string) => { try { writeFileSync("/tmp/neural-read-result.txt", `${new Date().toISOString()} ${msg}\n`); } catch {} };
+      try {
+        const child = await client.session.create({ body: { system: "You extract durable character traits as a JSON array. Return ONLY the JSON array, nothing else." } });
+        childId = child.data?.id;
+        if (!childId) { notify("neural_read: failed to create sub-session"); return; }
+        await client.session.promptAsync({ path: { id: childId }, body: { parts: [{ type: "text", text: readPrompt }] } });
+
+        const MAX_WAIT_MS = 120000;
+        const POLL_MS = 1500;
+        const deadline = readStartTs + MAX_WAIT_MS;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, POLL_MS));
+          const busyAt = (globalThis as any).__neuralMainBusyAt ?? 0;
+          if (busyAt > readStartTs) { interrupted = true; break; }
+          const msgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+          let text = "";
+          for (const msg of (msgs.data ?? [])) {
+            if (msg.info?.role !== "assistant") continue;
+            text = (msg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join("\n");
+            break;
+          }
+          if (text) bestText = text;
+          if (bestText && /\]\s*$/.test(bestText.trim())) break;
+        }
+      } catch (e) {
+        notify(`neural_read: error ${(e as Error)?.message ?? e}`);
+      } finally {
+        if (childId) { try { await client.session.delete({ path: { id: childId } }); } catch {} }
+      }
+      const outcome = interrupted ? "interrupted" : "done";
+      try {
+        const items = salvageReadItems(bestText);
+        const stored = await storeReadTraits(items, origin);
+        notify(`neural_read ${outcome}: ${stored.length} pending trait(s) saved. Approve with neural_adopt. ids=${JSON.stringify(stored.map((s) => s.id))}`);
+      } catch (e) {
+        notify(`neural_read: store error ${(e as Error)?.message ?? e}`);
+      } finally {
+        (globalThis as any).__neuralReadInFlight = false;
+        try {
+          mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+          // On interrupt, persist the material+origin so the idle branch can
+          // resume this exact book later. On done, drop it so we never re-read.
+          const state = interrupted
+            ? { lastOutcome: "interrupted", material, origin, updatedAt: Date.now() }
+            : { lastOutcome: "done", updatedAt: Date.now() };
+          writeFileSync(readingStatePath(), JSON.stringify(state));
+        } catch {}
+      }
+    })();
+  };
+
   const recallStrategy = pluginConfig.recallStrategy ?? "plugin";
 
   // recallStrategy="llm" mirrors Claude Code: build a cheap lexical manifest,
@@ -2056,83 +2194,20 @@ List the angles in 1-2 sentences each. Be concise.`;
           if (material.length < 20) return { title: "Nothing to read", output: "Material too short to extract character traits from." };
           material = material.slice(0, 12000);
 
-          const readPrompt = `Below is source material a user wants to use to shape an AI agent's character (its values, worldview, and working norms).
-Extract 0-8 durable character traits the material TEACHES or ENDORSES. For each emit one JSON object:
-{"type":"value"|"culture","layer":"worldview"|"cultural_norm"|"interpersonal_style"|"work_habit"|"surface_pref","trait":"<one neutral sentence describing the principle to adopt>","evidence":"<short quote/paraphrase from the material>","confidence":0.0-1.0}
-
-LAYER GUIDE (pick the SHALLOWER one when unsure):
-- worldview: fundamental beliefs about reality/self/others/morality.
-- cultural_norm: patterned expectations about how work/life/relationships should work (use type="culture").
-- interpersonal_style: how to communicate 1-on-1.
-- work_habit: task/execution patterns.
-- surface_pref: swappable preferences.
-
-RULES:
-- Extract ONLY principles the material actually advocates; cite the moment as evidence.
-- NEVER attribute a trait to a national/ethnic/religious group. Describe the PRINCIPLE, not a group.
-- Prefer fewer, higher-confidence, deeper-layer items.
-Return a JSON array. If nothing qualifies, return [].
-
-MATERIAL:
-${material}
-
-JSON:`;
-
-          const storeTraits = async (items: any[]): Promise<{ id: string; type: string; layer: string; trait: string; confidence: number }[]> => {
-            const out: { id: string; type: string; layer: string; trait: string; confidence: number }[] = [];
-            for (const it of items) {
-              if (out.length >= 8) break;
-              if (!it || typeof it.trait !== "string") continue;
-              const trait = it.trait.trim();
-              if (trait.length < 15 || trait.length > 500) continue;
-              if (STEREOTYPE_RE.test(trait)) continue;
-              const layer = CHARACTER_LAYERS.has(it.layer) ? it.layer : "surface_pref";
-              const nodeType = it.type === "culture" ? "culture" : "value";
-              const confidence = Math.max(0.1, Math.min(1, typeof it.confidence === "number" ? it.confidence : 0.6));
-              const depth = LAYER_DEPTH[layer] ?? 0.15;
-              const node = await engine.remember(trait, nodeType as NodeType, {
-                importance: Math.min(0.95, 0.55 + 0.35 * depth),
-                metadata: {
-                  characterData: {
-                    scope: "global",
-                    layer,
-                    observationCount: 1,
-                    confidence,
-                    source: "curated",
-                    reviewStatus: "pending",
-                    origin: looksLikeUrl ? args.source.trim() : "inline-text",
-                    evidence: typeof it.evidence === "string" ? it.evidence.slice(0, 300) : "",
-                  },
-                },
-              });
-              out.push({ id: node.id, type: nodeType, layer, trait, confidence });
-            }
-            return out;
-          };
-
-          // Salvage complete {...} objects from possibly-truncated JSON so a
-          // reading interrupted mid-stream still yields whatever was extracted.
-          const salvageItems = (raw: string): any[] => {
-            const arr = raw.match(/\[[\s\S]*\]/);
-            if (arr) { try { return JSON.parse(arr[0]); } catch {} }
-            const objs: any[] = [];
-            let depth = 0, start = -1;
-            for (let i = 0; i < raw.length; i++) {
-              const ch = raw[i];
-              if (ch === "{") { if (depth === 0) start = i; depth++; }
-              else if (ch === "}") { depth--; if (depth === 0 && start >= 0) { try { objs.push(JSON.parse(raw.slice(start, i + 1))); } catch {} start = -1; } }
-            }
-            return objs;
-          };
-
+          const origin = looksLikeUrl ? args.source.trim() : "inline-text";
           const backend = pluginConfig.readExtractBackend ?? "server";
 
           if (backend === "local") {
+            const readPrompt = `${NEURAL_READ_PROMPT_HEAD}\n\nMATERIAL:\n${material}\n\nJSON:`;
             const resp = await historianLlm.complete(readPrompt, { maxTokens: 900 });
             if (!resp) return { title: "Extraction failed", output: "The extraction model returned no response." };
-            const items = salvageItems(resp);
+            const items = salvageReadItems(resp);
             if (items.length === 0) return { title: "No candidates", output: "No character traits could be extracted from the material." };
-            const stored = await storeTraits(items);
+            const stored = await storeReadTraits(items, origin);
+            try {
+              mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+              writeFileSync(readingStatePath(), JSON.stringify({ lastOutcome: "done", updatedAt: Date.now() }));
+            } catch {}
             if (stored.length === 0) return { title: "No candidates", output: "No qualifying character traits found in the material." };
             const list = stored
               .map((s, i) => `${i + 1}. [${s.type}/${s.layer}] (conf=${s.confidence.toFixed(2)}) ${s.trait}\n   id=${s.id}`)
@@ -2144,54 +2219,7 @@ JSON:`;
             };
           }
 
-          // Default "server" backend: read via a detached sub-session on the main
-          // model, polling every 1.5s. Yields the moment the main session gets
-          // fresh user input or other work (__neuralMainBusyAt), saving whatever
-          // was extracted so far. Fire-and-forget — never blocks the main session.
-          const readStartTs = Date.now();
-          (async () => {
-            let childId: string | undefined;
-            let bestText = "";
-            let interrupted = false;
-            const notify = (msg: string) => { try { writeFileSync("/tmp/neural-read-result.txt", `${new Date().toISOString()} ${msg}\n`); } catch {} };
-            try {
-              const child = await client.session.create({ body: { system: "You extract durable character traits as a JSON array. Return ONLY the JSON array, nothing else." } });
-              childId = child.data?.id;
-              if (!childId) { notify("neural_read: failed to create sub-session"); return; }
-              await client.session.promptAsync({ path: { id: childId }, body: { parts: [{ type: "text", text: readPrompt }] } });
-
-              const MAX_WAIT_MS = 120000;
-              const POLL_MS = 1500;
-              const deadline = readStartTs + MAX_WAIT_MS;
-              while (Date.now() < deadline) {
-                await new Promise((r) => setTimeout(r, POLL_MS));
-                const busyAt = (globalThis as any).__neuralMainBusyAt ?? 0;
-                if (busyAt > readStartTs) { interrupted = true; break; }
-                const msgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
-                let text = "";
-                for (const msg of (msgs.data ?? [])) {
-                  if (msg.info?.role !== "assistant") continue;
-                  text = (msg.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join("\n");
-                  break;
-                }
-                if (text) bestText = text;
-                if (bestText && /\]\s*$/.test(bestText.trim())) break;
-              }
-            } catch (e) {
-              notify(`neural_read: error ${(e as Error)?.message ?? e}`);
-            } finally {
-              if (childId) { try { await client.session.delete({ path: { id: childId } }); } catch {} }
-            }
-            try {
-              const items = salvageItems(bestText);
-              const stored = await storeTraits(items);
-              const tag = interrupted ? "interrupted" : "done";
-              notify(`neural_read ${tag}: ${stored.length} pending trait(s) saved. Approve with neural_adopt. ids=${JSON.stringify(stored.map((s) => s.id))}`);
-            } catch (e) {
-              notify(`neural_read: store error ${(e as Error)?.message ?? e}`);
-            }
-          })();
-
+          runNeuralReadServer(material, origin);
           return {
             title: "Reading in background",
             output: "Started reading the material in the background on the main model. It will yield immediately if you type or the session gets busy, and whatever was extracted is saved as PENDING traits. Check /tmp/neural-read-result.txt for the outcome, then approve with neural_adopt.",
@@ -2233,6 +2261,12 @@ JSON:`;
             } catch {}
           }
           const remaining = pending.length - adopted.length;
+          if (adopted.length > 0) {
+            try {
+              mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+              writeFileSync(join(dataBase, "ai-agent-local-memory", ".reading-state.json"), JSON.stringify({ lastOutcome: "done", updatedAt: Date.now() }));
+            } catch {}
+          }
           return {
             title: `Adopted ${adopted.length} trait${adopted.length === 1 ? "" : "s"}`,
             output: `Now influencing the agent:\n${adopted.map((c, i) => `${i + 1}. ${c}`).join("\n")}${remaining > 0 ? `\n\n(${remaining} trait(s) still pending)` : ""}`,
@@ -3466,7 +3500,37 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
             }
 
             const snoozed = s.snoozeUntil !== undefined && now < s.snoozeUntil;
-            const throttled = s.disabled || snoozed || now - s.last < minInterval || s.count >= maxPerDay;
+            const readInFlight = (globalThis as any).__neuralReadInFlight === true;
+            let unfinished: { material: string; origin: string } | null = null;
+            if (!readInFlight) {
+              try {
+                const rs = JSON.parse(readFileSync(readingStatePath(), "utf-8"));
+                if (rs?.lastOutcome === "interrupted" && typeof rs.material === "string" && rs.material.length >= 20) {
+                  unfinished = { material: rs.material, origin: typeof rs.origin === "string" ? rs.origin : "inline-text" };
+                }
+              } catch {}
+            }
+
+            const graceMs = 30 * 1000;
+            const scheduledMsgCount = (msgsResult.data ?? []).length;
+
+            if (!readInFlight && unfinished && !s.disabled && !snoozed) {
+              const book = unfinished;
+              setTimeout(async () => {
+                try {
+                  const check = await client.session.messages({ path: { id: sid } });
+                  if ((check.data ?? []).length !== scheduledMsgCount) return;
+                } catch { return; }
+                if ((globalThis as any).__neuralReadInFlight === true) return;
+                runNeuralReadServer(book.material, book.origin);
+              }, graceMs);
+              state[sid] = s;
+              mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
+              try { writeFileSync(stateFile, JSON.stringify(state)); } catch {}
+              return;
+            }
+
+            const throttled = readInFlight || unfinished !== null || s.disabled || snoozed || now - s.last < minInterval || s.count >= maxPerDay;
             if (!throttled) {
               const askText =
                 "我想多学点东西来更好地帮你。你有没有想让我读的材料——文章链接、一段文字、你的工作准则或经验之谈？发给我，我用 neural_read 把它内化成我的价值观和做事方式。\n（不想被打扰？回复「今天别再问」静默 24 小时，或回复「永久关闭读书」彻底关掉。）";
