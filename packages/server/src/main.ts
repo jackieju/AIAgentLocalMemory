@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { randomUUID } from "node:crypto";
 import {
   NeuralContextEngine,
   NeuralGraph,
@@ -8,8 +9,11 @@ import {
   type ContextRenderConfig,
   type RecallOptions,
   type SessionData,
+  type SessionMessage,
   type NodeType,
   type ActivationSeed,
+  type MemoryNode,
+  type EpisodicData,
 } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
 
@@ -175,8 +179,58 @@ const handlers: Record<
     if (!session || typeof session !== "object") {
       throw new RpcParamError('missing or invalid "session"');
     }
-    await inst.engine.ingest(session as unknown as SessionData);
-    return { ok: true };
+    const sd = session as unknown as SessionData;
+    if (typeof sd.id !== "string" || sd.id.length === 0) {
+      throw new RpcParamError('session.id must be a non-empty string');
+    }
+    if (!Array.isArray(sd.messages)) {
+      throw new RpcParamError('session.messages must be an array');
+    }
+
+    // Persist each turn as an episode node carrying EpisodicData so that
+    // ContextRenderer.render() can reconstruct and fidelity-compress it later.
+    // engine.ingest() alone stores episodes WITHOUT episodicData, which the
+    // renderer skips — so we write the renderable episodes ourselves here.
+    const existing = await inst.storage.queryNodes({
+      type: "episode",
+      sourceSession: sd.id,
+    });
+    const renderable = existing.filter(
+      (n) => (n.metadata?.episodicData as EpisodicData | undefined) !== undefined,
+    );
+    let turnIndex = renderable.length;
+    const now = Date.now();
+
+    for (const msg of sd.messages as SessionMessage[]) {
+      if (msg.role !== "user" && msg.role !== "assistant") continue;
+      const content = typeof msg.content === "string" ? msg.content : "";
+      if (content.length === 0) continue;
+
+      const episodic: EpisodicData = {
+        role: msg.role,
+        tag: turnIndex + 1,
+        turnIndex,
+        fidelity: { f0: content },
+      };
+      const node: MemoryNode = {
+        id: randomUUID(),
+        type: "episode",
+        content,
+        importance: 0.5,
+        strength: 1.0,
+        accessCount: 0,
+        lastAccessed: typeof msg.timestamp === "number" ? msg.timestamp : now,
+        createdAt: typeof msg.timestamp === "number" ? msg.timestamp : now,
+        sourceSession: sd.id,
+        metadata: { episodicData: episodic },
+      };
+      await inst.storage.putNode(node);
+      turnIndex += 1;
+    }
+
+    // Also feed the engine so associative memory (concepts/facts) still builds.
+    await inst.engine.ingest(sd);
+    return { ok: true, turns: turnIndex - renderable.length };
   },
 
   async getStats(params) {
