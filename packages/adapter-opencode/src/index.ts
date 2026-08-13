@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, ContextRenderer, NeuralGraph, WorkingMemory, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker } from "@ai-agent-local-memory/core";
-import type { NodeType, RecallResult, MemoryNode, ContextRenderConfig, EpisodicData, LLMProvider, EmbeddingProvider, Compartment } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker } from "@ai-agent-local-memory/core";
+import type { NodeType, RecallResult, MemoryNode, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 import { Tokenizer } from "ai-tokenizer";
 import * as claudeEncoding from "ai-tokenizer/encoding/claude";
@@ -1094,17 +1094,11 @@ JSON array of stale indexes:`;
     } catch {}
   }, 120 * 1000);
 
-  const renderConfig: ContextRenderConfig = {
-    contextWindowTokens: pluginConfig.contextWindowTokens ?? 128000,
-    budgetRatio: pluginConfig.budgetRatio ?? 0.6,
-  };
-
-  const graph = new NeuralGraph(storage);
-  const workingMemory = new WorkingMemory();
-  const renderer = new ContextRenderer(graph, workingMemory, storage, renderConfig);
-
   let turnCounter = 0;
+  // Compression-only state: §N§ message tags. Decoupled from the memory graph —
+  // neural_reduce/pin/expand touch only these sets and compartments, never episode nodes.
   const droppedTags = new Set<number>();
+  const pinnedTags = new Set<number>();
   let lastModelKey = "";
   let lastContextPercentage = 0;
   let reasoningWatermark = 0;
@@ -1460,27 +1454,18 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
           drop: z.string().min(1).describe("Tag IDs to suppress, supports ranges."),
         },
         async execute(args) {
+          // Compression-only: mark §N§ tags as dropped. The transform loop renders
+          // these as empty text next turn (see droppedTags.has(tagCounter) consumer).
+          // Never touches episode/memory nodes — the memory graph is fully decoupled.
           const tags = parseTagRanges(args.drop);
-          for (const t of tags) droppedTags.add(t);
-          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
-          let suppressed = 0;
-          for (const node of episodes) {
-            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;
-            const tag = ep && typeof ep.tag === "number" ? (ep.tag as number) : undefined;
-            if (tag !== undefined && tags.includes(tag)) {
-              await storage.updateNode(node.id, {
-                metadata: {
-                  ...node.metadata,
-                  episodicData: { ...ep, suppressed: true },
-                },
-              });
-              suppressed++;
-            }
+          for (const t of tags) {
+            droppedTags.add(t);
+            pinnedTags.delete(t);
           }
           return {
-            title: `Suppressed ${suppressed} tag${suppressed === 1 ? "" : "s"}`,
+            title: `Dropped ${tags.length} tag${tags.length === 1 ? "" : "s"}`,
             output: `Dropped tags ${tags.join(", ")} from context. Changes take effect next turn.`,
-            metadata: { suppressed, requested: tags },
+            metadata: { dropped: tags },
           };
         },
       }),
@@ -1492,25 +1477,14 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
         },
         async execute(args) {
           const tags = parseTagRanges(args.tags);
-          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
-          let pinned = 0;
-          for (const node of episodes) {
-            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined) ?? undefined;
-            const tag = ep && typeof ep.tag === "number" ? (ep.tag as number) : undefined;
-            if (tag !== undefined && tags.includes(tag)) {
-              await storage.updateNode(node.id, {
-                metadata: {
-                  ...node.metadata,
-                  episodicData: { ...ep, pinned: true },
-                },
-              });
-              pinned++;
-            }
+          for (const t of tags) {
+            pinnedTags.add(t);
+            droppedTags.delete(t);
           }
           return {
-            title: `Pinned ${pinned} tag${pinned === 1 ? "" : "s"}`,
-            output: `Marked ${pinned} episodic node(s) as pinned (requested tags: ${tags.join(", ")}).`,
-            metadata: { pinned, requested: tags },
+            title: `Pinned ${tags.length} tag${tags.length === 1 ? "" : "s"}`,
+            output: `Pinned tags ${tags.join(", ")}. These stay at full fidelity and are exempt from reasoning/tool-output cleanup next turn.`,
+            metadata: { pinned: tags },
           };
         },
       }),
@@ -1550,27 +1524,32 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
 
           if (!args.tags) return { title: "Error", output: "Provide tags or start+end range." };
           const tagNumbers = parseTagRanges(args.tags);
-          const episodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId });
-          const results: string[] = [];
-
-          for (const node of episodes) {
-            const ep = (node.metadata?.episodicData as Record<string, unknown> | undefined);
-            const tag = ep && typeof ep.tag === "number" ? ep.tag : undefined;
-            if (tag !== undefined && tagNumbers.includes(tag)) {
-              const fidelity = ep?.fidelity as Record<string, string> | undefined;
-              const fullText = fidelity?.f0 ?? node.content;
-              results.push(`§${tag}§ [${ep?.role ?? "?"}]\n${fullText}`);
+          try {
+            const expandSessionId = currentOpenCodeSessionId || sessionId;
+            const msgsResult = await client.session.messages({ path: { id: expandSessionId }, query: {} });
+            if (!msgsResult.data) return { title: "Error", output: "Failed to read session messages." };
+            const allMsgs = msgsResult.data;
+            const results: string[] = [];
+            for (const tag of tagNumbers) {
+              const msg = allMsgs[tag];
+              if (!msg) continue;
+              const role = msg.info.role;
+              const textParts = msg.parts.filter((p: any) => p.type === "text");
+              const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").replace(/^§\d+§\s*/, "");
+              if (content) results.push(`§${tag}§ [${role}]\n${content}`);
+              droppedTags.delete(tag);
             }
+            if (results.length === 0) {
+              return { title: "No matches", output: `No messages found for tags: ${tagNumbers.join(", ")}` };
+            }
+            return {
+              title: `Expanded ${results.length} message(s)`,
+              output: results.join("\n\n---\n\n"),
+              metadata: { expanded: results.length, tags: tagNumbers },
+            };
+          } catch (e: any) {
+            return { title: "Error", output: e.message };
           }
-
-          if (results.length === 0) {
-            return { title: "No matches", output: `No episodic nodes found for tags: ${tagNumbers.join(", ")}` };
-          }
-          return {
-            title: `Expanded ${results.length} message(s)`,
-            output: results.join("\n\n---\n\n"),
-            metadata: { expanded: results.length, tags: tagNumbers },
-          };
         },
       }),
 
@@ -2669,7 +2648,9 @@ List the angles in 1-2 sentences each. Be concise.`;
           const msg = tail[i];
           tagCounter++;
 
-          if (droppedTags.has(tagCounter) || toolDropIndices.has(i)) {
+          const isPinned = pinnedTags.has(tagCounter);
+
+          if (!isPinned && (droppedTags.has(tagCounter) || toolDropIndices.has(i))) {
             rendered.push({
               info: msg.info,
               parts: [{ type: "text", text: "" }],
@@ -2678,7 +2659,7 @@ List the angles in 1-2 sentences each. Be concise.`;
             continue;
           }
 
-          const isProtected = tagCounter > protectedFloor;
+          const isProtected = isPinned || tagCounter > protectedFloor;
           const ts = msg.info?.time?.created ? msg.info.time.created * 1000 : 0;
 
           if (prevTimestamp > 0 && ts > 0 && msg.info?.role === "user") {
