@@ -1,5 +1,10 @@
 export * from "./interfaces.ts";
 export { NeuralGraph } from "./graph.ts";
+export type {
+  ActivationSeed,
+  ActivationResult,
+  SpreadingActivationOptions,
+} from "./graph.ts";
 export { HebbianLearning } from "./hebbian.ts";
 export { WorkingMemory } from "./working-memory.ts";
 export { SessionAbstractor } from "./abstraction.ts";

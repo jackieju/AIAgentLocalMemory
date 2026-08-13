@@ -1,0 +1,15 @@
+{
+  "name": "@ai-agent-local-memory/server",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "gate": "bun run src/gate.ts",
+    "build": "bun build src/main.ts --compile --outfile dist/nvp-server",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-agent-local-memory/core": "workspace:*",
+    "@ai-agent-local-memory/storage-sqlite": "workspace:*"
+  }
+}
