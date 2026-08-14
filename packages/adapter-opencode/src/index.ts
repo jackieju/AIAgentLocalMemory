@@ -1107,6 +1107,61 @@ JSON array of stale indexes:`;
   let lastSystemHash = "";
   let lastCompressTime = 0;
   let currentOpenCodeSessionId = "";
+  // Contract: contentHash is structural (parts count + type initial + billable length), so any
+  // shape change (e.g. microCompact stubbing state.output 50k→2k) flips the hash and forces a
+  // recompute — a stale token count can never leak into the budget scan.
+  const TOKEN_CACHE_MAX = 10000;
+  const msgTokenCache = new Map<string, { hash: string; tokens: number }>();
+  const msgContentHash = (msg: any): string => {
+    const parts = msg?.parts ?? [];
+    let h = parts.length + "|";
+    for (const p of parts) {
+      const t = (p?.type ?? "?").charAt(0);
+      const st = p?.state;
+      const len =
+        (st && typeof st.output === "string" ? st.output.length : 0) +
+        (typeof p?.content === "string" ? p.content.length : 0) +
+        (typeof p?.text === "string" ? p.text.length : 0) +
+        (typeof p?.input === "string" ? p.input.length : 0);
+      h += t + len + ",";
+    }
+    return h;
+  };
+  // Memoized replacement for the per-message token sum used by the budget scan. Falls back to
+  // the real countClaudeTokens/partBillableText on a cache miss or structural change, then
+  // caches the result keyed by stable messageId. `billable` is passed in to avoid a hard
+  // dependency on closure-scoped helpers defined later inside transform.
+  const msgTokensMemo = (
+    msg: any,
+    billable: (part: any) => string,
+    countFn: (text: string) => number,
+  ): number => {
+    const id: string | undefined = msg?.info?.id ?? msg?.id;
+    const hash = msgContentHash(msg);
+    if (id) {
+      const hit = msgTokenCache.get(id);
+      if (hit && hit.hash === hash) {
+        // LRU touch: re-insert to move to the end of iteration order.
+        msgTokenCache.delete(id);
+        msgTokenCache.set(id, hit);
+        return hit.tokens;
+      }
+    }
+    let tokens = 10;
+    for (const part of msg?.parts ?? []) {
+      const text = billable(part);
+      if (text) tokens += countFn(text);
+    }
+    if (id) {
+      msgTokenCache.set(id, { hash, tokens });
+      if (msgTokenCache.size > TOKEN_CACHE_MAX) {
+        // Evict oldest (Map preserves insertion order; first key is least-recently-set/touched).
+        const oldest = msgTokenCache.keys().next().value;
+        if (oldest !== undefined) msgTokenCache.delete(oldest);
+      }
+    }
+    return tokens;
+  };
   // Guards against concurrent compress runs for the same session — critical to keep
   // transform non-blocking on sessions with large uncovered gaps. Mirrors magic-context's
   // compartmentInProgress flag: 80-95% pct triggers a background compress; further transform
@@ -2505,8 +2560,11 @@ List the angles in 1-2 sentences each. Be concise.`;
         const MICROCOMPACT_STUB_CHARS = 2000;
         const MICROCOMPACT_KEEP_RECENT = 3;
         {
+          // Only scan the most-recent HARD_TAIL_CAP messages: older ones can never enter the
+          // tail (the budget scan floors there too), so stubbing them is wasted O(N·parts) work.
+          const microScanFrom = Math.max(0, messages.length - 500);
           const largeToolMsgIdx: number[] = [];
-          for (let i = 0; i < messages.length; i++) {
+          for (let i = microScanFrom; i < messages.length; i++) {
             for (const part of (messages[i].parts ?? [])) {
               const st = (part as any).state;
               const out = st && typeof st.output === "string" ? st.output : (typeof (part as any).content === "string" ? (part as any).content : "");
@@ -2518,14 +2576,21 @@ List the angles in 1-2 sentences each. Be concise.`;
             : Infinity;
           for (const i of largeToolMsgIdx) {
             if (i >= microKeepFrom) continue;
+            let mutated = false;
             for (const part of (messages[i].parts ?? [])) {
               const st = (part as any).state;
               if (st && typeof st.output === "string" && st.output.length > MICROCOMPACT_TRIGGER_CHARS) {
                 st.output = st.output.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+                mutated = true;
               }
               if (typeof (part as any).content === "string" && (part as any).content.length > MICROCOMPACT_TRIGGER_CHARS) {
                 (part as any).content = (part as any).content.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+                mutated = true;
               }
+            }
+            if (mutated) {
+              const mid = (messages[i] as any)?.info?.id ?? (messages[i] as any)?.id;
+              if (mid) msgTokenCache.delete(mid);
             }
           }
         }
@@ -2536,15 +2601,19 @@ List the angles in 1-2 sentences each. Be concise.`;
           // a bounded-usage session still produced "Input is too long" (out=512).
           // tailStart is only a floor: we won't cross below it (compartment coverage),
           // but the budget can cut the tail shorter.
-          const floor = Math.max(0, Math.min(tailStart, messages.length));
+          // HARD_TAIL_CAP raises the floor so a zero-compartment session with a cold cache
+          // still only touches the most-recent K messages instead of thousands. Safety net,
+          // not the primary strategy: normal budget scans stop far earlier.
+          const HARD_TAIL_CAP = 500;
+          const floor = Math.max(
+            0,
+            Math.min(tailStart, messages.length),
+            messages.length - HARD_TAIL_CAP,
+          );
           let tailTokens = 0;
           let startIdx = messages.length;
           for (let i = messages.length - 1; i >= floor; i--) {
-            let msgTokens = 10;
-            for (const part of (messages[i].parts ?? [])) {
-              const text = partBillableText(part);
-              if (text) msgTokens += countClaudeTokens(text);
-            }
+            const msgTokens = msgTokensMemo(messages[i], partBillableText, countClaudeTokens);
             if (tailTokens + msgTokens > tailBudgetTokens) break;
             tailTokens += msgTokens;
             startIdx = i;
@@ -2920,10 +2989,9 @@ List the angles in 1-2 sentences each. Be concise.`;
             })();
             let tailEstTokens = 0;
             for (const m of messages) {
-              for (const p of (m.parts ?? [])) {
-                const t = partBillableText(p);
-                if (t) { tailEstTokens += countClaudeTokens(t); }
-              }
+              // msgTokensMemo adds a fixed +10 per-message overhead; subtract it to keep
+              // this diagnostic sum identical to the old bare billable-token total.
+              tailEstTokens += msgTokensMemo(m, partBillableText, countClaudeTokens) - 10;
             }
             writeFileSync(`/tmp/neural-rendered-${openCodeSessionId}.json`, JSON.stringify({
               ts: Date.now(),
