@@ -167,6 +167,12 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
             <text fg="#2c3b51">─────────────────</text>
             <text bold fg="#fa399e">◆ Session</text>
             <text fg="#6a87af">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
+            <text fg="#455a77">Transcript:</text>
+            <text fg={props.session_id && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${props.session_id}.md`)) ? "#05bcd8" : "#455a77"}>
+              {props.session_id
+                ? `~/.local/share/ai-agent-local-memory/transcripts/${props.session_id.slice(0, 12)}….md`
+                : "—"}
+            </text>
             <text fg="#2c3b51">─────────────────</text>
             <text bold fg="#ff7605">◆ Compartments</text>
             <text fg="#6a87af">{stats().compartmentStatus

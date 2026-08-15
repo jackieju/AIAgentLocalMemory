@@ -169,14 +169,16 @@ function createSidebarSlot(api) {
             _el$24 = _$createElement("text"),
             _el$25 = _$createElement("text"),
             _el$27 = _$createElement("text"),
-            _el$29 = _$createElement("text"),
+            _el$28 = _$createElement("text"),
             _el$30 = _$createElement("text"),
             _el$32 = _$createElement("text"),
-            _el$34 = _$createElement("text"),
+            _el$33 = _$createElement("text"),
             _el$35 = _$createElement("text"),
-            _el$36 = _$createElement("text"),
+            _el$37 = _$createElement("text"),
             _el$38 = _$createElement("text"),
-            _el$39 = _$createTextNode(`v0.4.1 b`);
+            _el$39 = _$createElement("text"),
+            _el$41 = _$createElement("text"),
+            _el$42 = _$createTextNode(`v0.4.1 b`);
           _$insertNode(_el$, _el$2);
           _$insertNode(_el$, _el$4);
           _$insertNode(_el$, _el$6);
@@ -193,13 +195,15 @@ function createSidebarSlot(api) {
           _$insertNode(_el$, _el$24);
           _$insertNode(_el$, _el$25);
           _$insertNode(_el$, _el$27);
-          _$insertNode(_el$, _el$29);
+          _$insertNode(_el$, _el$28);
           _$insertNode(_el$, _el$30);
           _$insertNode(_el$, _el$32);
-          _$insertNode(_el$, _el$34);
+          _$insertNode(_el$, _el$33);
           _$insertNode(_el$, _el$35);
-          _$insertNode(_el$, _el$36);
+          _$insertNode(_el$, _el$37);
           _$insertNode(_el$, _el$38);
+          _$insertNode(_el$, _el$39);
+          _$insertNode(_el$, _el$41);
           _$setProp(_el$, "flexDirection", "column");
           _$setProp(_el$, "paddingLeft", 1);
           _$setProp(_el$, "paddingRight", 1);
@@ -242,36 +246,51 @@ function createSidebarSlot(api) {
             var _c$ = _$memo(() => !!props.session_id);
             return () => _c$() ? props.session_id.slice(0, 12) : "—";
           })());
-          _$insertNode(_el$25, _$createTextNode(`─────────────────`));
-          _$setProp(_el$25, "fg", "#2c3b51");
-          _$insertNode(_el$27, _$createTextNode(`◆ Compartments`));
-          _$setProp(_el$27, "bold", true);
-          _$setProp(_el$27, "fg", "#ff7605");
-          _$setProp(_el$29, "fg", "#6a87af");
-          _$insert(_el$29, (() => {
-            var _c$2 = _$memo(() => !!stats().compartmentStatus);
-            return () => _c$2() ? `${stats().compartmentStatus.afterPct}%/${stats().compartmentStatus.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus.ts).toISOString())}  (${stats().compartmentStatus.compartments})` : "no data";
+          _$insertNode(_el$25, _$createTextNode(`Transcript:`));
+          _$setProp(_el$25, "fg", "#455a77");
+          _$insert(_el$27, (() => {
+            var _c$2 = _$memo(() => !!props.session_id);
+            return () => _c$2() ? `~/.local/share/ai-agent-local-memory/transcripts/${props.session_id.slice(0, 12)}….md` : "—";
           })());
-          _$insertNode(_el$30, _$createTextNode(`─────────────────`));
-          _$setProp(_el$30, "fg", "#2c3b51");
-          _$insertNode(_el$32, _$createTextNode(`◆ LoRA Training`));
-          _$setProp(_el$32, "bold", true);
-          _$setProp(_el$32, "fg", "#e640ff");
-          _$insert(_el$34, (() => {
-            var _c$3 = _$memo(() => !!stats().trainingInProgress);
-            return () => _c$3() ? "⏳ Training in progress..." : _$memo(() => !!stats().training)() ? `Last: ${formatLastSync(stats().training.lastTime)} ${stats().training.lastResult === "improved" ? "✓" : "✗"}` : "no training yet";
+          _$insertNode(_el$28, _$createTextNode(`─────────────────`));
+          _$setProp(_el$28, "fg", "#2c3b51");
+          _$insertNode(_el$30, _$createTextNode(`◆ Compartments`));
+          _$setProp(_el$30, "bold", true);
+          _$setProp(_el$30, "fg", "#ff7605");
+          _$setProp(_el$32, "fg", "#6a87af");
+          _$insert(_el$32, (() => {
+            var _c$3 = _$memo(() => !!stats().compartmentStatus);
+            return () => _c$3() ? `${stats().compartmentStatus.afterPct}%/${stats().compartmentStatus.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus.ts).toISOString())}  (${stats().compartmentStatus.compartments})` : "no data";
           })());
-          _$setProp(_el$35, "fg", "#6a87af");
-          _$insert(_el$35, (() => {
-            var _c$4 = _$memo(() => !!stats().training);
-            return () => _c$4() ? `Runs: ${stats().training.totalRuns}  Improved: ${stats().training.improved}/${stats().training.totalRuns}` : "";
+          _$insertNode(_el$33, _$createTextNode(`─────────────────`));
+          _$setProp(_el$33, "fg", "#2c3b51");
+          _$insertNode(_el$35, _$createTextNode(`◆ LoRA Training`));
+          _$setProp(_el$35, "bold", true);
+          _$setProp(_el$35, "fg", "#e640ff");
+          _$insert(_el$37, (() => {
+            var _c$4 = _$memo(() => !!stats().trainingInProgress);
+            return () => _c$4() ? "⏳ Training in progress..." : _$memo(() => !!stats().training)() ? `Last: ${formatLastSync(stats().training.lastTime)} ${stats().training.lastResult === "improved" ? "✓" : "✗"}` : "no training yet";
           })());
-          _$insertNode(_el$36, _$createTextNode(`─────────────────`));
-          _$setProp(_el$36, "fg", "#2c3b51");
-          _$insertNode(_el$38, _el$39);
-          _$setProp(_el$38, "fg", "#455a77");
-          _$insert(_el$38, () => stats().build, null);
-          _$effect(_$p => _$setProp(_el$34, "fg", stats().trainingInProgress ? "#ecaa00" : "#6a87af", _$p));
+          _$setProp(_el$38, "fg", "#6a87af");
+          _$insert(_el$38, (() => {
+            var _c$5 = _$memo(() => !!stats().training);
+            return () => _c$5() ? `Runs: ${stats().training.totalRuns}  Improved: ${stats().training.improved}/${stats().training.totalRuns}` : "";
+          })());
+          _$insertNode(_el$39, _$createTextNode(`─────────────────`));
+          _$setProp(_el$39, "fg", "#2c3b51");
+          _$insertNode(_el$41, _el$42);
+          _$setProp(_el$41, "fg", "#455a77");
+          _$insert(_el$41, () => stats().build, null);
+          _$effect(_p$ => {
+            var _v$ = props.session_id && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${props.session_id}.md`)) ? "#05bcd8" : "#455a77",
+              _v$2 = stats().trainingInProgress ? "#ecaa00" : "#6a87af";
+            _v$ !== _p$.e && (_p$.e = _$setProp(_el$27, "fg", _v$, _p$.e));
+            _v$2 !== _p$.t && (_p$.t = _$setProp(_el$37, "fg", _v$2, _p$.t));
+            return _p$;
+          }, {
+            e: undefined,
+            t: undefined
+          });
           return _el$;
         })();
       }
