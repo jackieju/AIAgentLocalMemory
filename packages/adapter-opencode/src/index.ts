@@ -1036,6 +1036,8 @@ JSON array of stale indexes:`;
           await execP('git add -A && git commit -m "sync: auto" && git push', { cwd: syncDir });
         }
         await execP("git pull --rebase", { cwd: syncDir });
+        // git pull only updates operations.jsonl; replay() writes those ops into graph.db.
+        await opLog.replay(storage);
       } catch {}
     }, 60 * 60 * 1000);
   }
@@ -1728,10 +1730,10 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
 
       neural_sync: tool({
         description:
-          "Synchronize neural memory across machines via Git. Commits local changes, pulls remote changes, and replays new operations into the local graph.",
+          "Synchronize neural memory across machines via Git. Commits local changes, pulls remote changes, and replays new operations into the local graph. Also supports one-way import: merge another person's shared memory repo into your own graph WITHOUT changing your sync config or pushing back to them.",
         args: {
-          action: z.enum(["status", "push", "pull", "init", "export"]).optional().describe("Action: status (default), push (commit+push), pull (pull+replay), init (initialize sync repo), export (backfill existing memories into operation log)."),
-          repoUrl: z.string().optional().describe("Git remote URL (required for init)."),
+          action: z.enum(["status", "push", "pull", "init", "export", "import"]).optional().describe("Action: status (default), push (commit+push), pull (pull+replay), init (initialize sync repo), export (backfill existing memories into operation log), import (one-way merge another person's repo into your graph — clones repoUrl to a temp dir, replays their operations.jsonl into your graph, does NOT touch your own sync remote)."),
+          repoUrl: z.string().optional().describe("Git remote URL. Required for init (your own sync repo) and import (another person's shared memory repo)."),
         },
         async execute(args) {
           const action = args.action ?? "status";
@@ -1822,6 +1824,60 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
               exported++;
             }
             return { title: `Exported ${exported} operations`, output: `Backfilled ${allNodes.length} nodes + ${allEdges.length} edges.\nNew: ${exported}, Skipped (already in log): ${skipped}.\nRun neural_sync(action='push') to upload.` };
+          }
+
+          if (action === "import") {
+            if (!args.repoUrl) return { title: "Error", output: "repoUrl required for import (another person's shared memory repo URL)." };
+            const { execSync } = await import("node:child_process");
+            const { readFileSync: rfs, existsSync: ex, mkdtempSync, rmSync } = await import("node:fs");
+            const { tmpdir } = await import("node:os");
+            const tmpBase = mkdtempSync(join(tmpdir(), "neural-import-"));
+            try {
+              // 1. Shallow-clone their repo into an isolated temp dir. Never touches our syncDir/remote.
+              execSync(`git clone --depth 1 ${args.repoUrl} ${JSON.stringify(tmpBase).slice(1, -1)}`, { stdio: "ignore" });
+              const theirLog = join(tmpBase, "operations.jsonl");
+              if (!ex(theirLog)) {
+                return { title: "Nothing to import", output: `Cloned ${args.repoUrl} but found no operations.jsonl.\nThe other person must run neural_sync(action='export') then push before you can import.` };
+              }
+
+              // 2. Replay their operations directly into our graph. No machine filter, no watermark:
+              //    import is an unconditional one-way merge. Dedup is handled by putNode/putEdge upsert
+              //    semantics — re-importing the same repo is idempotent and safe.
+              const raw = rfs(theirLog, "utf-8").trim();
+              const lines = raw.length > 0 ? raw.split("\n").filter(Boolean) : [];
+              let applied = 0;
+              let failed = 0;
+              for (const line of lines) {
+                let op: any;
+                try { op = JSON.parse(line); } catch { failed++; continue; }
+                try {
+                  switch (op.op) {
+                    case "add_node": await storage.putNode(op.data); applied++; break;
+                    case "update_node": await storage.updateNode(op.data.id, op.data.updates); applied++; break;
+                    case "delete_node": await storage.deleteNode(op.data.id); applied++; break;
+                    case "add_edge": await storage.putEdge(op.data); applied++; break;
+                    case "update_edge": await storage.updateEdge(op.data.src, op.data.dst, op.data.type, op.data.updates); applied++; break;
+                    case "delete_edge": await storage.deleteEdge(op.data.src, op.data.dst, op.data.type); applied++; break;
+                    default: break;
+                  }
+                } catch { failed++; }
+              }
+
+              // 3. Backfill embeddings for the freshly imported nodes (their log carries no vectors).
+              let embedded = 0;
+              if (applied > 0 && embeddingProvider) {
+                const { EmbeddingLinker } = await import("@ai-agent-local-memory/core");
+                const linker = new EmbeddingLinker(rawStorage, embeddingProvider, { batchSize: 32, similarityThreshold: 0.7 });
+                const embResult = await linker.run({ limit: applied });
+                embedded = embResult.embedded;
+              }
+
+              return { title: `Imported ${applied} operations`, output: `Merged ${args.repoUrl} into your graph (one-way).\nApplied: ${applied}, Failed: ${failed}.\nEmbedded: ${embedded} new nodes.\nYour own sync remote is unchanged; nothing was pushed back to them.` };
+            } catch (e: any) {
+              return { title: "Import failed", output: e.message };
+            } finally {
+              try { rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+            }
           }
 
           return { title: "Error", output: `Unknown action: ${action}` };
