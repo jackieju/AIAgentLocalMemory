@@ -1170,6 +1170,152 @@ JSON array of stale indexes:`;
   // passes see the flag and skip re-triggering until this run resolves.
   const compressInFlight = new Set<string>();
 
+  // RED LINE: the echo path (chat.message + messages.transform) must never do
+  // network/DB/LLM work. A stuck localhost:6655 request or slow opencode.db
+  // write freezes the single Node event loop for minutes/forever, so the user's
+  // reply never appears. transform only RECORDS work here; session.idle (fired
+  // after the reply is on screen) drains this map and runs the heavy work.
+  const pendingIdleWork = new Map<string, {
+    shouldCompress: boolean;
+    mode: "force" | "abort" | "normal";
+    lastEndOrd: number;
+    chunkSize: number;
+    minUncovered: number;
+    linkMsgs: Array<{ role: string; content: string }>;
+  }>();
+
+  async function runDeferredCompress(
+    openCodeSessionId: string,
+    windowMsgs: Array<{ ord: number; id: string; role: string; content: string }>,
+    mode: "force" | "abort" | "normal"
+  ): Promise<void> {
+    if (compressInFlight.has(openCodeSessionId)) return;
+    if (windowMsgs.length === 0) return;
+
+    if (mode === "force" || mode === "abort") {
+      compressInFlight.add(openCodeSessionId);
+      try {
+        const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
+        const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
+        if (result) {
+          compartmentStore.save(result);
+          lastCompressTime = Date.now();
+          try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+        }
+      } catch (compressErr: any) {
+        try { writeFileSync("/tmp/neural-compress-error.log", `${Date.now()} [${mode}] ${compressErr?.message ?? compressErr}\n${compressErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+      } finally { compressInFlight.delete(openCodeSessionId); }
+      return;
+    }
+
+    compressInFlight.add(openCodeSessionId);
+    try {
+      const childSession = await client.session.create({
+        body: { title: "neural-compartment" },
+      } as any);
+      if (!childSession.data) return;
+      const childId = childSession.data.id;
+
+      const historianPrompt = `You compress conversation history into three fidelity tiers.
+Output STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }
+
+p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.
+p2: One sentence (≤25 tokens). The single most important thing that happened.
+p3: A title (≤8 tokens). Like a git commit subject.
+
+IMPORTANT: Write p1, p2, p3 in the SAME LANGUAGE the user uses in the conversation. If user writes Chinese, output Chinese. If English, output English.
+Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.
+
+CONVERSATION:
+${windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n")}
+
+JSON:`;
+
+      await client.session.promptAsync({
+        path: { id: childId },
+        body: { agent: "neural-historian", parts: [{ type: "text", text: historianPrompt }] },
+      } as any);
+
+      await new Promise(r => setTimeout(r, 15000));
+
+      const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
+      if (childMsgs.data) {
+        for (const msg of childMsgs.data) {
+          if (msg.info.role !== "assistant") continue;
+          for (const part of msg.parts) {
+            if (part.type !== "text") continue;
+            const text = (part as { text?: string }).text ?? "";
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) continue;
+            try {
+              const parsed = JSON.parse(jsonMatch[0]);
+              if (parsed.p1 && parsed.p2 && parsed.p3) {
+                compartmentStore.save({
+                  sessionId: openCodeSessionId,
+                  startOrd: windowMsgs[0].ord,
+                  endOrd: windowMsgs[windowMsgs.length - 1].ord,
+                  startMessageId: windowMsgs[0].id ?? "",
+                  endMessageId: windowMsgs[windowMsgs.length - 1].id ?? "",
+                  p1: String(parsed.p1),
+                  p2: String(parsed.p2),
+                  p3: String(parsed.p3),
+                  tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
+                  createdAt: Date.now(),
+                });
+                historianFailureCount = 0;
+                lastCompressTime = Date.now();
+                try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
+
+                try {
+                  await engine.remember(
+                    `[${parsed.p3}] ${parsed.p1}`,
+                    "episode",
+                    { importance: 0.6, metadata: { sourceSession: sessionId, startOrd: windowMsgs[0].ord, endOrd: windowMsgs[windowMsgs.length - 1].ord } }
+                  );
+                } catch {}
+              }
+            } catch {
+              historianFailureCount++;
+            }
+          }
+        }
+      }
+
+      try { await client.session.delete({ path: { id: childId } }); } catch {}
+    } catch {
+      historianFailureCount++;
+    } finally { compressInFlight.delete(openCodeSessionId); }
+  }
+
+  async function runDeferredLinking(linkMsgs: Array<{ role: string; content: string }>): Promise<void> {
+    try {
+      const linker = new LightweightLinker(rawStorage);
+      for (const lm of linkMsgs) {
+        const role = lm.role;
+        if (role !== "user" && role !== "assistant") continue;
+        const content = (lm.content ?? "").trim();
+        if (content.length < 10 || content.length > 3000) continue;
+        turnCounter++;
+        const node = {
+          id: crypto.randomUUID(),
+          type: "episode" as const,
+          content: content.slice(0, 2000),
+          importance: role === "user" ? 0.6 : 0.5,
+          strength: 0.5,
+          accessCount: 0,
+          lastAccessed: Date.now(),
+          createdAt: Date.now(),
+          sourceSession: sessionId,
+        };
+        const stored = await safePutNode(node);
+        if (!stored) continue;
+        await linker.linkToExisting(node);
+      }
+    } catch {}
+    try { await (globalThis as any).__neuralMaybeRunDreamer?.(); } catch {}
+  }
+
   try {
     const row = rawStorage.getDb().prepare(`SELECT value FROM kv WHERE key = 'reasoning_watermark'`).get() as { value: string } | undefined;
     if (row) reasoningWatermark = parseInt(row.value) || 0;
@@ -3088,178 +3234,28 @@ List the angles in 1-2 sentences each. Be concise.`;
         })();
 
         const lastEndOrd = compartments.length > 0 ? compartments[compartments.length - 1].endOrd : 0;
-        const dbListFull = getSessionMessageList(openCodeSessionId);
-        if (shouldFireHistorian && dbListFull.length - lastEndOrd > PROTECTED_TAGS_COUNT + 1) {
-          const historianChunkTokens = Math.max(8000, Math.min(50000, Math.round(contextLimit * 0.25)));
-          const chunkSize = Math.round(historianChunkTokens / 500);
-          // Build the compression window straight from the DB (stable ordinals + ids),
-          // not from the mutated transform array. The array was already spliced/tagged
-          // and dropping id-unmatched entries left compartments covering almost nothing.
-          const windowMsgs = getSessionMessagePartsForOrds(
-            openCodeSessionId,
-            lastEndOrd + 1,
-            lastEndOrd + chunkSize
-          );
-
-          if (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) {
-            writeFileSync("/tmp/neural-compress-notify.txt", `⏳ Context at ${Math.round(usagePct)}% — compressing history (background)...`);
-            if (!compressInFlight.has(openCodeSessionId)) {
-              compressInFlight.add(openCodeSessionId);
-              (async () => {
-                try {
-                  const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-                  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
-                  const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
-                  if (result) {
-                    compartmentStore.save(result);
-                    lastCompressTime = Date.now();
-                    try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
-                  }
-                } catch (compressErr: any) {
-                  try { writeFileSync("/tmp/neural-compress-error.log", `${Date.now()} [force] ${compressErr?.message ?? compressErr}\n${compressErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
-                } finally { compressInFlight.delete(openCodeSessionId); }
-              })();
-            }
-          } else if (usagePct >= ABORT_PCT) {
-            if (!compressInFlight.has(openCodeSessionId)) {
-              compressInFlight.add(openCodeSessionId);
-              (async () => {
-                try {
-                  const compressPromise = (historian as any).compress(openCodeSessionId, windowMsgs);
-                  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
-                  const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
-                  if (result) {
-                    compartmentStore.save(result);
-                    lastCompressTime = Date.now();
-                    try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
-                  }
-                } catch (compressErr: any) {
-                  try { writeFileSync("/tmp/neural-compress-error.log", `${Date.now()} [abort] ${compressErr?.message ?? compressErr}\n${compressErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
-                } finally { compressInFlight.delete(openCodeSessionId); }
-              })();
-            }
-          } else {
-            if (compressInFlight.has(openCodeSessionId)) {
-              // one background historian is already running for this session — don't spawn another;
-              // magic-context serializes historian to one at a time via compartmentInProgress flag.
-              // extra concurrent historians pile up in opencode's single event loop, delaying user turns.
-            } else {
-              compressInFlight.add(openCodeSessionId);
-              (async () => {
-              try {
-                // Use opencode's built-in historian agent to keep sub-session light.
-                // Without body.agent="historian" opencode inherits parent's full-weight agent
-                // (Sisyphus - Ultraworker) which does long reasoning + tool loops, taking 3-5 min
-                // per historian pass and blocking the parent's next transform.
-                const childSession = await client.session.create({
-                  body: { title: "neural-compartment" },
-                } as any);
-                if (!childSession.data) return;
-                const childId = childSession.data.id;
-
-                const historianPrompt = `You compress conversation history into three fidelity tiers.
-Output STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }
-
-p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.
-p2: One sentence (≤25 tokens). The single most important thing that happened.
-p3: A title (≤8 tokens). Like a git commit subject.
-
-IMPORTANT: Write p1, p2, p3 in the SAME LANGUAGE the user uses in the conversation. If user writes Chinese, output Chinese. If English, output English.
-Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.
-
-CONVERSATION:
-${windowMsgs.map(m => `[${m.role}]: ${m.content}`).join("\n\n")}
-
-JSON:`;
-
-                await client.session.promptAsync({
-                  path: { id: childId },
-                  body: { agent: "neural-historian", parts: [{ type: "text", text: historianPrompt }] },
-                } as any);
-
-                await new Promise(r => setTimeout(r, 15000));
-
-                const childMsgs = await client.session.messages({ path: { id: childId }, query: { limit: 5 } });
-                if (childMsgs.data) {
-                  for (const msg of childMsgs.data) {
-                    if (msg.info.role !== "assistant") continue;
-                    for (const part of msg.parts) {
-                      if (part.type !== "text") continue;
-                      const text = (part as { text?: string }).text ?? "";
-                      const jsonMatch = text.match(/\{[\s\S]*\}/);
-                      if (!jsonMatch) continue;
-                      try {
-                        const parsed = JSON.parse(jsonMatch[0]);
-                        if (parsed.p1 && parsed.p2 && parsed.p3) {
-                          compartmentStore.save({
-                            sessionId: openCodeSessionId,
-                            startOrd: windowMsgs[0].ord,
-                            endOrd: windowMsgs[windowMsgs.length - 1].ord,
-                            startMessageId: windowMsgs[0].id ?? "",
-                            endMessageId: windowMsgs[windowMsgs.length - 1].id ?? "",
-                            p1: String(parsed.p1),
-                            p2: String(parsed.p2),
-                            p3: String(parsed.p3),
-                            tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
-                            createdAt: Date.now(),
-                          });
-                          historianFailureCount = 0;
-                          lastCompressTime = Date.now();
-                          try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
-
-                          try {
-                            await engine.remember(
-                              `[${parsed.p3}] ${parsed.p1}`,
-                              "episode",
-                              { importance: 0.6, metadata: { sourceSession: sessionId, startOrd: windowMsgs[0].ord, endOrd: windowMsgs[windowMsgs.length - 1].ord } }
-                            );
-                          } catch {}
-                        }
-                      } catch {
-                        historianFailureCount++;
-                      }
-                    }
-                  }
-                }
-
-                try { await client.session.delete({ path: { id: childId } }); } catch {}
-              } catch {
-                historianFailureCount++;
-              } finally { compressInFlight.delete(openCodeSessionId); }
-            })();
-            }
-          }
+        const historianChunkTokens = Math.max(8000, Math.min(50000, Math.round(contextLimit * 0.25)));
+        const chunkSize = Math.round(historianChunkTokens / 500);
+        const compressMode: "force" | "abort" | "normal" =
+          (usagePct >= FORCE_COMPARTMENT_PCT && !isMidTurn) ? "force"
+          : (usagePct >= ABORT_PCT) ? "abort"
+          : "normal";
+        const linkMsgs = messages.slice(-2)
+          .filter((m: any) => m.info?.role === "user" || m.info?.role === "assistant")
+          .map((m: any) => ({
+            role: m.info.role as string,
+            content: (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => p.text ?? "").join("\n").trim(),
+          }));
+        if (openCodeSessionId) {
+          pendingIdleWork.set(openCodeSessionId, {
+            shouldCompress: shouldFireHistorian,
+            mode: compressMode,
+            lastEndOrd,
+            chunkSize,
+            minUncovered: PROTECTED_TAGS_COUNT + 1,
+            linkMsgs,
+          });
         }
-
-        setTimeout(async () => {
-          try {
-            const linker = new LightweightLinker(rawStorage);
-            const lastMsgs = messages.slice(-2);
-            for (const msg of lastMsgs) {
-              const role = msg.info?.role;
-              if (role !== "user" && role !== "assistant") continue;
-              const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
-              const content = textParts.map((p: any) => p.text ?? "").join("\n").trim();
-              if (content.length < 10 || content.length > 3000) continue;
-              turnCounter++;
-              const node = {
-                id: crypto.randomUUID(),
-                type: "episode" as const,
-                content: content.slice(0, 2000),
-                importance: role === "user" ? 0.6 : 0.5,
-                strength: 0.5,
-                accessCount: 0,
-                lastAccessed: Date.now(),
-                createdAt: Date.now(),
-                sourceSession: sessionId,
-              };
-              const stored = await safePutNode(node);
-              if (!stored) continue;
-              await linker.linkToExisting(node);
-            }
-          } catch {}
-          try { await (globalThis as any).__neuralMaybeRunDreamer?.(); } catch {}
-        }, 500);
 
         const afterPct = realUsage.percentage > 0
           ? Math.round(realUsage.percentage * (rendered.length / Math.max(messages.length, 1)))
@@ -3496,7 +3492,23 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
         if (props?.status?.type !== "idle") return;
         const sid = props?.sessionID;
         if (!sid) return;
-        if (!sid) return;
+
+        const idleWork = pendingIdleWork.get(sid);
+        if (idleWork) {
+          pendingIdleWork.delete(sid);
+          if (idleWork.shouldCompress) {
+            try {
+              const dbListFull = getSessionMessageList(sid);
+              if (dbListFull.length - idleWork.lastEndOrd > idleWork.minUncovered) {
+                const windowMsgs = getSessionMessagePartsForOrds(sid, idleWork.lastEndOrd + 1, idleWork.lastEndOrd + idleWork.chunkSize);
+                await runDeferredCompress(sid, windowMsgs, idleWork.mode);
+              }
+            } catch {}
+          }
+          if (idleWork.linkMsgs.length > 0) {
+            try { await runDeferredLinking(idleWork.linkMsgs); } catch {}
+          }
+        }
 
         const transcriptDir = join(homedir(), ".local", "share", "ai-agent-local-memory", "transcripts");
         const { mkdirSync } = await import("node:fs");
