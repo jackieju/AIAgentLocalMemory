@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { createSignal, onCleanup } from "solid-js"
+import { createSignal, createMemo, onCleanup } from "solid-js"
 import type { TuiPlugin, TuiSlotPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -141,11 +141,30 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
   return {
     order: 200,
     slots: {
-      sidebar_content: (props) => {
+      sidebar_content: (_ctx, value) => {
         const [stats, setStats] = createSignal<Stats>(getStats())
 
         const timer = setInterval(() => setStats(getStats()), 30000)
         onCleanup(() => clearInterval(timer))
+
+        // SolidJS: keep value.session_id a getter. OpenCode passes it in the
+        // second slot arg and injects it after mount, so a one-time read
+        // captures an empty value forever.
+        const sessionId = () => value.session_id
+        const sessionShort = createMemo(() => {
+          const sid = sessionId()
+          return sid ? sid.slice(0, 12) : "—"
+        })
+        const transcriptExists = createMemo(() => {
+          const sid = sessionId()
+          return !!sid && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${sid}.md`))
+        })
+        const transcriptPath = createMemo(() => {
+          const sid = sessionId()
+          return sid
+            ? `~/.local/share/ai-agent-local-memory/transcripts/${sid.slice(0, 12)}….md`
+            : "—"
+        })
 
         return (
           <box flexDirection="column" paddingLeft={1} paddingRight={1}>
@@ -166,12 +185,10 @@ function createSidebarSlot(api: TuiPluginApi): TuiSlotPlugin {
             <text fg="#05bcd8">{formatRepo(stats().syncRepo)}</text>
             <text fg="#2c3b51">─────────────────</text>
             <text bold fg="#fa399e">◆ Session</text>
-            <text fg="#6a87af">{props.session_id ? props.session_id.slice(0, 12) : "—"}</text>
+            <text fg="#6a87af">{sessionShort()}</text>
             <text fg="#455a77">Transcript:</text>
-            <text fg={props.session_id && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${props.session_id}.md`)) ? "#05bcd8" : "#455a77"}>
-              {props.session_id
-                ? `~/.local/share/ai-agent-local-memory/transcripts/${props.session_id.slice(0, 12)}….md`
-                : "—"}
+            <text fg={transcriptExists() ? "#05bcd8" : "#455a77"}>
+              {transcriptPath()}
             </text>
             <text fg="#2c3b51">─────────────────</text>
             <text bold fg="#ff7605">◆ Compartments</text>

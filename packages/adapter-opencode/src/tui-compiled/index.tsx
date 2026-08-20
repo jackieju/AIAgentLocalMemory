@@ -8,7 +8,7 @@ import { insertNode as _$insertNode } from "opentui:runtime-module:%40opentui%2F
 import { setProp as _$setProp } from "opentui:runtime-module:%40opentui%2Fsolid";
 import { createElement as _$createElement } from "opentui:runtime-module:%40opentui%2Fsolid";
 /** @jsxImportSource @opentui/solid */
-import { createSignal, onCleanup } from "opentui:runtime-module:solid-js";
+import { createSignal, createMemo, onCleanup } from "opentui:runtime-module:solid-js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -142,10 +142,27 @@ function createSidebarSlot(api) {
   return {
     order: 200,
     slots: {
-      sidebar_content: props => {
+      sidebar_content: (_ctx, value) => {
         const [stats, setStats] = createSignal(getStats());
         const timer = setInterval(() => setStats(getStats()), 30000);
         onCleanup(() => clearInterval(timer));
+
+        // SolidJS: keep value.session_id a getter. OpenCode passes it in the
+        // second slot arg and injects it after mount, so a one-time read
+        // captures an empty value forever.
+        const sessionId = () => value.session_id;
+        const sessionShort = createMemo(() => {
+          const sid = sessionId();
+          return sid ? sid.slice(0, 12) : "—";
+        });
+        const transcriptExists = createMemo(() => {
+          const sid = sessionId();
+          return !!sid && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${sid}.md`));
+        });
+        const transcriptPath = createMemo(() => {
+          const sid = sessionId();
+          return sid ? `~/.local/share/ai-agent-local-memory/transcripts/${sid.slice(0, 12)}….md` : "—";
+        });
         return (() => {
           var _el$ = _$createElement("box"),
             _el$2 = _$createElement("text"),
@@ -242,16 +259,10 @@ function createSidebarSlot(api) {
           _$setProp(_el$22, "bold", true);
           _$setProp(_el$22, "fg", "#fa399e");
           _$setProp(_el$24, "fg", "#6a87af");
-          _$insert(_el$24, (() => {
-            var _c$ = _$memo(() => !!props.session_id);
-            return () => _c$() ? props.session_id.slice(0, 12) : "—";
-          })());
+          _$insert(_el$24, sessionShort);
           _$insertNode(_el$25, _$createTextNode(`Transcript:`));
           _$setProp(_el$25, "fg", "#455a77");
-          _$insert(_el$27, (() => {
-            var _c$2 = _$memo(() => !!props.session_id);
-            return () => _c$2() ? `~/.local/share/ai-agent-local-memory/transcripts/${props.session_id.slice(0, 12)}….md` : "—";
-          })());
+          _$insert(_el$27, transcriptPath);
           _$insertNode(_el$28, _$createTextNode(`─────────────────`));
           _$setProp(_el$28, "fg", "#2c3b51");
           _$insertNode(_el$30, _$createTextNode(`◆ Compartments`));
@@ -259,8 +270,8 @@ function createSidebarSlot(api) {
           _$setProp(_el$30, "fg", "#ff7605");
           _$setProp(_el$32, "fg", "#6a87af");
           _$insert(_el$32, (() => {
-            var _c$3 = _$memo(() => !!stats().compartmentStatus);
-            return () => _c$3() ? `${stats().compartmentStatus.afterPct}%/${stats().compartmentStatus.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus.ts).toISOString())}  (${stats().compartmentStatus.compartments})` : "no data";
+            var _c$ = _$memo(() => !!stats().compartmentStatus);
+            return () => _c$() ? `${stats().compartmentStatus.afterPct}%/${stats().compartmentStatus.beforePct}%  ${formatLastSync(new Date(stats().compartmentStatus.ts).toISOString())}  (${stats().compartmentStatus.compartments})` : "no data";
           })());
           _$insertNode(_el$33, _$createTextNode(`─────────────────`));
           _$setProp(_el$33, "fg", "#2c3b51");
@@ -268,13 +279,13 @@ function createSidebarSlot(api) {
           _$setProp(_el$35, "bold", true);
           _$setProp(_el$35, "fg", "#e640ff");
           _$insert(_el$37, (() => {
-            var _c$4 = _$memo(() => !!stats().trainingInProgress);
-            return () => _c$4() ? "⏳ Training in progress..." : _$memo(() => !!stats().training)() ? `Last: ${formatLastSync(stats().training.lastTime)} ${stats().training.lastResult === "improved" ? "✓" : "✗"}` : "no training yet";
+            var _c$2 = _$memo(() => !!stats().trainingInProgress);
+            return () => _c$2() ? "⏳ Training in progress..." : _$memo(() => !!stats().training)() ? `Last: ${formatLastSync(stats().training.lastTime)} ${stats().training.lastResult === "improved" ? "✓" : "✗"}` : "no training yet";
           })());
           _$setProp(_el$38, "fg", "#6a87af");
           _$insert(_el$38, (() => {
-            var _c$5 = _$memo(() => !!stats().training);
-            return () => _c$5() ? `Runs: ${stats().training.totalRuns}  Improved: ${stats().training.improved}/${stats().training.totalRuns}` : "";
+            var _c$3 = _$memo(() => !!stats().training);
+            return () => _c$3() ? `Runs: ${stats().training.totalRuns}  Improved: ${stats().training.improved}/${stats().training.totalRuns}` : "";
           })());
           _$insertNode(_el$39, _$createTextNode(`─────────────────`));
           _$setProp(_el$39, "fg", "#2c3b51");
@@ -282,7 +293,7 @@ function createSidebarSlot(api) {
           _$setProp(_el$41, "fg", "#455a77");
           _$insert(_el$41, () => stats().build, null);
           _$effect(_p$ => {
-            var _v$ = props.session_id && existsSync(join(homedir(), ".local/share/ai-agent-local-memory/transcripts", `${props.session_id}.md`)) ? "#05bcd8" : "#455a77",
+            var _v$ = transcriptExists() ? "#05bcd8" : "#455a77",
               _v$2 = stats().trainingInProgress ? "#ecaa00" : "#6a87af";
             _v$ !== _p$.e && (_p$.e = _$setProp(_el$27, "fg", _v$, _p$.e));
             _v$2 !== _p$.t && (_p$.t = _$setProp(_el$37, "fg", _v$2, _p$.t));
