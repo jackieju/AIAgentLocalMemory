@@ -1,0 +1,17 @@
+{
+  "name": "@ai-agent-local-memory/dashboard",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "neural-dashboard": "src/server.ts"
+  },
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-agent-local-memory/core": "workspace:*",
+    "@ai-agent-local-memory/storage-sqlite": "workspace:*"
+  }
+}

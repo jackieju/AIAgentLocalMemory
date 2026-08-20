@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural Memory Dashboard</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --panel2: #22262f; --border: #2e333d;
+    --text: #e6e8ec; --muted: #9aa2b1; --accent: #6ea8fe; --accent2: #7ee0a8;
+    --warn: #f0c674; --danger: #f08a8a; --purple: #b18ae0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; background: var(--panel); }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .lang { margin-left: auto; }
+  nav { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  nav button { background: none; border: none; color: var(--muted); padding: 12px 16px;
+    cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent; }
+  nav button.active { color: var(--text); border-bottom-color: var(--accent); }
+  nav button:hover { color: var(--text); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .card .num { font-size: 28px; font-weight: 700; }
+  .card .lbl { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .section { margin-top: 24px; }
+  .section h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+  .bar > span { display: block; height: 100%; background: var(--accent); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 11px;
+    background: var(--panel2); color: var(--muted); }
+  .tag.value { background: #2a3a2a; color: var(--accent2); }
+  .tag.culture { background: #3a2a3a; color: var(--purple); }
+  .tag.fact { background: #3a3520; color: var(--warn); }
+  .tag.episode { background: #23282f; color: var(--muted); }
+  .tag.concept { background: #202838; color: var(--accent); }
+  input, textarea, select { background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button.btn { background: var(--accent); border: none; color: #10131a; padding: 8px 14px;
+    border-radius: 8px; cursor: pointer; font-weight: 600; }
+  button.btn:hover { filter: brightness(1.1); }
+  button.btn.ghost { background: var(--panel2); color: var(--text); }
+  button.btn.danger { background: var(--danger); color: #2a0f0f; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .node-item { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 8px; cursor: pointer; }
+  .node-item:hover { border-color: var(--accent); }
+  .node-item .content { margin-top: 4px; }
+  .axis { margin: 12px 0; }
+  .axis .track { position: relative; height: 28px; background: var(--panel2); border-radius: 14px;
+    display: flex; align-items: center; }
+  .axis .marker { position: absolute; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 0 3px rgba(110,168,254,.25); transform: translateX(-50%); }
+  .axis .ends { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .pill { padding: 4px 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; }
+  #toast { position: fixed; bottom: 24px; right: 24px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px; display: none; max-width: 380px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .drawer { position: fixed; top: 0; right: 0; width: 460px; max-width: 92vw; height: 100vh;
+    background: var(--panel); border-left: 1px solid var(--border); padding: 20px; overflow-y: auto;
+    transform: translateX(100%); transition: transform .2s; z-index: 10; }
+  .drawer.open { transform: translateX(0); }
+  .drawer .close { float: right; cursor: pointer; color: var(--muted); font-size: 20px; }
+  .edge-item { padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .hidden { display: none; }
+  code.inline { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧠 Neural Memory Dashboard</h1>
+  <span class="sub" id="dataDir"></span>
+  <button class="btn ghost lang" id="langToggle">中文</button>
+</header>
+<nav>
+  <button data-tab="overview" data-i18n="nav.overview" class="active"></button>
+  <button data-tab="portrait" data-i18n="nav.portrait"></button>
+  <button data-tab="browse" data-i18n="nav.browse"></button>
+  <button data-tab="sync" data-i18n="nav.sync"></button>
+</nav>
+<main>
+  <section id="tab-overview"></section>
+  <section id="tab-portrait" class="hidden"></section>
+  <section id="tab-browse" class="hidden"></section>
+  <section id="tab-sync" class="hidden"></section>
+</main>
+
+<div class="drawer" id="drawer"><span class="close" onclick="closeDrawer()">×</span><div id="drawerBody"></div></div>
+<div id="toast"></div>
+
+<script>
+// ---- i18n dictionary. Default language = English; user can switch to Chinese. ----
+const DICT = {
+  en: {
+    'nav.overview': 'Overview',
+    'nav.portrait': 'Portrait',
+    'nav.browse': 'Nodes',
+    'nav.sync': 'Sync / Merge',
+    'common.loading': 'Loading…',
+    'common.loadFailed': (m) => 'Load failed: ' + m,
+    'common.noData': 'No data',
+    'ov.totalNodes': 'Total nodes',
+    'ov.totalEdges': 'Total edges',
+    'ov.dbSize': 'graph.db size',
+    'ov.charTraits': 'Character traits (value/culture)',
+    'ov.nodeDist': 'Node type distribution',
+    'ov.edgeDist': 'Edge type distribution',
+    'ov.layerDist': 'Character layer distribution',
+    'pt.insufficient': 'Insufficient portrait samples',
+    'pt.insufficientDesc': (n) => 'Only ' + n + ' value/culture traits so far (≥3 recommended for a reliable portrait). As conversations accumulate, the Dreamer will automatically extract more character and cultural traits.',
+    'pt.culturalOrientation': 'Cultural orientation',
+    'pt.scores': 'Orientation intensity scores (depth × confidence weighted)',
+    'pt.east': 'East', 'pt.west': 'West', 'pt.classical': 'Classical', 'pt.modern': 'Modern',
+    'pt.coreTraits': 'Core character traits',
+    'axis.west': 'West / Individual', 'axis.east': 'East / Collective',
+    'axis.modernEnd': 'Modern / Utility', 'axis.classicalEnd': 'Classical / Tradition',
+    'br.searchPlaceholder': 'Search memory content (FTS)…',
+    'br.allTypes': 'All types',
+    'br.search': 'Search',
+    'br.noResults': 'No results',
+    'br.content': 'Content',
+    'br.save': 'Save',
+    'br.deleteNode': 'Delete node',
+    'br.created': (t) => 'Created: ' + t,
+    'br.accessed': (n) => 'Accessed: ' + n + ' times',
+    'br.linkedEdges': (n) => 'Linked edges (' + n + ')',
+    'br.noLinks': 'No links',
+    'br.confirmDelNode': 'Delete this node? This cannot be undone.',
+    'br.confirmDelEdge': 'Delete this edge?',
+    'br.saved': 'Saved',
+    'br.saveFailed': (m) => 'Save failed: ' + m,
+    'br.deleted': 'Deleted',
+    'br.delFailed': (m) => 'Delete failed: ' + m,
+    'br.edgeDeleted': 'Edge deleted',
+    'sy.status': 'Sync status',
+    'sy.dir': 'Sync directory',
+    'sy.gitInit': 'Git initialized',
+    'sy.yes': '✅ Yes', 'sy.no': '❌ No',
+    'sy.remote': 'Remote repo',
+    'sy.notConfigured': 'Not configured',
+    'sy.opsLines': (n, sz) => n + ' lines · ' + sz,
+    'sy.lastSync': 'Last sync',
+    'sy.lastCommit': 'Latest commit',
+    'sy.pending': 'Pending changes',
+    'sy.items': (n) => n + ' items',
+    'sy.mergeTitle': 'One-way merge into local memory',
+    'sy.mergeDesc': 'Merge memory operations one-way from someone else\'s Git repo or a local operations.jsonl into your local graph. This is idempotent (safe to re-import) and does NOT push back to them or change your own sync remote.',
+    'sy.methodA': 'Method A · From Git URL',
+    'sy.cloneMerge': 'Clone & merge',
+    'sy.methodAHint': 'The other side must first run neural_sync(export) and push; the repo root must contain operations.jsonl.',
+    'sy.methodB': 'Method B · From local file',
+    'sy.readMerge': 'Read & merge',
+    'sy.merging': 'Merging…',
+    'sy.mergingDesc': 'Cloning/reading and replaying operations, this may take a while…',
+    'sy.mergeDone': 'Merge complete',
+    'sy.source': 'Source',
+    'sy.logLines': 'Log lines',
+    'sy.applied': 'Applied',
+    'sy.failed': 'Failed',
+    'sy.mergeDoneToast': (n) => 'Merge complete: applied ' + n,
+    'sy.mergeFailed': 'Merge failed',
+    'sy.needInput': 'Please enter a URL or file path',
+    'ago.sec': (n) => n + 's ago', 'ago.min': (n) => n + 'm ago',
+    'ago.hour': (n) => n + 'h ago', 'ago.day': (n) => n + 'd ago', 'ago.none': '—',
+  },
+  zh: {
+    'nav.overview': '概览',
+    'nav.portrait': '画像',
+    'nav.browse': '节点',
+    'nav.sync': '同步 / 合并',
+    'common.loading': '加载中…',
+    'common.loadFailed': (m) => '加载失败: ' + m,
+    'common.noData': '无数据',
+    'ov.totalNodes': '节点总数',
+    'ov.totalEdges': '边总数',
+    'ov.dbSize': 'graph.db 大小',
+    'ov.charTraits': '性格特质 (value/culture)',
+    'ov.nodeDist': '节点类型分布',
+    'ov.edgeDist': '边类型分布',
+    'ov.layerDist': '性格层级分布',
+    'pt.insufficient': '画像样本不足',
+    'pt.insufficientDesc': (n) => '当前仅有 ' + n + ' 条 value/culture 特质（建议 ≥3 条才能形成可靠画像）。随着对话积累，Dreamer 会自动抽取更多性格与文化特质。',
+    'pt.culturalOrientation': '文化取向',
+    'pt.scores': '取向强度评分 (深度×置信度加权)',
+    'pt.east': '东方', 'pt.west': '西方', 'pt.classical': '古典', 'pt.modern': '现代',
+    'pt.coreTraits': '核心性格特质',
+    'axis.west': '西方/个人', 'axis.east': '东方/集体',
+    'axis.modernEnd': '现代/工具', 'axis.classicalEnd': '古典/传统',
+    'br.searchPlaceholder': '搜索记忆内容 (FTS)…',
+    'br.allTypes': '全部类型',
+    'br.search': '查询',
+    'br.noResults': '无结果',
+    'br.content': '内容',
+    'br.save': '保存',
+    'br.deleteNode': '删除节点',
+    'br.created': (t) => '创建: ' + t,
+    'br.accessed': (n) => '访问: ' + n + '次',
+    'br.linkedEdges': (n) => '关联边 (' + n + ')',
+    'br.noLinks': '无关联',
+    'br.confirmDelNode': '确定删除该节点？此操作不可撤销。',
+    'br.confirmDelEdge': '删除这条边？',
+    'br.saved': '已保存',
+    'br.saveFailed': (m) => '保存失败: ' + m,
+    'br.deleted': '已删除',
+    'br.delFailed': (m) => '删除失败: ' + m,
+    'br.edgeDeleted': '边已删除',
+    'sy.status': '同步状态',
+    'sy.dir': '同步目录',
+    'sy.gitInit': 'Git 已初始化',
+    'sy.yes': '✅ 是', 'sy.no': '❌ 否',
+    'sy.remote': '远程仓库',
+    'sy.notConfigured': '未配置',
+    'sy.opsLines': (n, sz) => n + ' 行 · ' + sz,
+    'sy.lastSync': '上次同步',
+    'sy.lastCommit': '最近提交',
+    'sy.pending': '待提交变更',
+    'sy.items': (n) => n + ' 项',
+    'sy.mergeTitle': '单向合并到本地记忆库',
+    'sy.mergeDesc': '从别人的 Git 仓库或本地 operations.jsonl 文件，把记忆操作单向合并进你的本地图。这是幂等的（重复导入安全），且不会推送回对方，也不改动你自己的同步远程。',
+    'sy.methodA': '方式 A · 从 Git URL',
+    'sy.cloneMerge': '克隆并合并',
+    'sy.methodAHint': '对方需先运行 neural_sync(export) 并 push，仓库根目录须含 operations.jsonl。',
+    'sy.methodB': '方式 B · 从本地文件',
+    'sy.readMerge': '读取并合并',
+    'sy.merging': '合并中…',
+    'sy.mergingDesc': '正在克隆/读取并回放操作，可能需要一些时间…',
+    'sy.mergeDone': '合并完成',
+    'sy.source': '来源',
+    'sy.logLines': '日志行数',
+    'sy.applied': '已应用',
+    'sy.failed': '失败',
+    'sy.mergeDoneToast': (n) => '合并完成: 应用 ' + n + ' 条',
+    'sy.mergeFailed': '合并失败',
+    'sy.needInput': '请输入 URL 或文件路径',
+    'ago.sec': (n) => n + '秒前', 'ago.min': (n) => n + '分钟前',
+    'ago.hour': (n) => n + '小时前', 'ago.day': (n) => n + '天前', 'ago.none': '—',
+  },
+};
+
+let lang = localStorage.getItem('nm_lang') || 'en';
+function t(k, ...args) {
+  const d = DICT[lang] || DICT.en;
+  let v = d[k];
+  if (v === undefined) v = DICT.en[k];
+  if (v === undefined) return k;
+  return typeof v === 'function' ? v(...args) : v;
+}
+function applyStaticI18n() {
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  $$('[data-i18n]').forEach(el => el.textContent = t(el.dataset.i18n));
+  $('#langToggle').textContent = lang === 'zh' ? 'EN' : '中文';
+}
+function setLang(l) {
+  lang = l;
+  localStorage.setItem('nm_lang', lang);
+  applyStaticI18n();
+  const active = $('nav button.active');
+  render(active ? active.dataset.tab : 'overview');
+}
+
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtBytes = (b) => b > 1e9 ? (b/1e9).toFixed(2)+' GB' : b > 1e6 ? (b/1e6).toFixed(1)+' MB' : b > 1e3 ? (b/1e3).toFixed(1)+' KB' : b+' B';
+const fmtTime = (ts) => ts ? new Date(ts).toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US') : '—';
+const fmtAgo = (ts) => { if(!ts) return t('ago.none'); const s=(Date.now()-ts)/1000; if(s<60)return t('ago.sec',Math.floor(s)); if(s<3600)return t('ago.min',Math.floor(s/60)); if(s<86400)return t('ago.hour',Math.floor(s/3600)); return t('ago.day',Math.floor(s/86400)); };
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || 'request failed');
+  return data;
+}
+function toast(msg, isErr) {
+  const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
+  t.style.borderColor = isErr ? 'var(--danger)' : 'var(--accent2)';
+  setTimeout(() => t.style.display = 'none', 3200);
+}
+
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  $$('main > section').forEach(s => s.classList.add('hidden'));
+  $('#tab-' + b.dataset.tab).classList.remove('hidden');
+  render(b.dataset.tab);
+});
+$('#langToggle').onclick = () => setLang(lang === 'zh' ? 'en' : 'zh');
+
+const TYPE_TAG = (t) => '<span class="tag ' + esc(t) + '">' + esc(t) + '</span>';
+
+async function render(tab) {
+  if (tab === 'overview') return renderOverview();
+  if (tab === 'portrait') return renderPortrait();
+  if (tab === 'browse') return renderBrowse();
+  if (tab === 'sync') return renderSync();
+}
+
+async function renderOverview() {
+  const el = $('#tab-overview');
+  el.innerHTML = '<p class="muted">' + t('common.loading') + '</p>';
+  try {
+    const s = await api('/api/stats');
+    $('#dataDir').textContent = s.dataDir;
+    let html = '<div class="grid">';
+    html += card(s.nodeCount.toLocaleString(), t('ov.totalNodes'));
+    html += card(s.edgeCount.toLocaleString(), t('ov.totalEdges'));
+    html += card(fmtBytes(s.dbSizeBytes), t('ov.dbSize'));
+    const charCount = (s.byLayer && Object.values(s.byLayer).reduce((a,b)=>a+b,0)) || 0;
+    html += card(charCount, t('ov.charTraits'));
+    html += '</div>';
+
+    html += '<div class="section"><h2>' + t('ov.nodeDist') + '</h2>' + distTable(s.byType, s.nodeCount) + '</div>';
+    html += '<div class="section"><h2>' + t('ov.edgeDist') + '</h2>' + distTable(s.byEdgeType, s.edgeCount) + '</div>';
+    if (charCount > 0) {
+      const layerRows = Object.entries(s.byLayer).map(([k,v]) => ({type:k, count:v}));
+      html += '<div class="section"><h2>' + t('ov.layerDist') + '</h2>' + distTable(layerRows, charCount) + '</div>';
+    }
+    el.innerHTML = html;
+  } catch (e) { el.innerHTML = '<p class="muted">' + t('common.loadFailed', esc(e.message)) + '</p>'; }
+}
+
+function card(num, lbl) {
+  return '<div class="card"><div class="num">' + num + '</div><div class="lbl">' + lbl + '</div></div>';
+}
+function distTable(rows, total) {
+  if (!rows || rows.length === 0) return '<p class="muted">' + t('common.noData') + '</p>';
+  let h = '<table><tbody>';
+  for (const r of rows) {
+    const pct = total > 0 ? (r.count / total * 100) : 0;
+    h += '<tr><td style="width:140px">' + TYPE_TAG(r.type) + '</td>' +
+         '<td style="width:90px" class="mono">' + r.count.toLocaleString() + '</td>' +
+         '<td><div class="bar"><span style="width:' + pct.toFixed(1) + '%"></span></div></td>' +
+         '<td style="width:60px" class="muted mono">' + pct.toFixed(1) + '%</td></tr>';
+  }
+  return h + '</tbody></table>';
+}
+
+async function renderPortrait() {
+  const el = $('#tab-portrait');
+  el.innerHTML = '<p class="muted">' + t('common.loading') + '</p>';
+  try {
+    const p = await api('/api/portrait');
+    let html = '';
+    if (!p.enough) {
+      html += '<div class="card" style="border-color:var(--warn)"><div class="lbl" style="color:var(--warn)">' + t('pt.insufficient') + '</div>' +
+        '<p class="muted">' + t('pt.insufficientDesc', p.sampleCount) + '</p></div>';
+    }
+    html += '<div class="section"><h2>' + t('pt.culturalOrientation') + '</h2>' + axisView(p.cultureAxis) + axisView(p.eraAxis) + '</div>';
+
+    html += '<div class="section"><h2>' + t('pt.scores') + '</h2><div class="row">';
+    html += '<span class="pill">' + t('pt.east') + ' ' + p.scores.east + '</span>';
+    html += '<span class="pill">' + t('pt.west') + ' ' + p.scores.west + '</span>';
+    html += '<span class="pill">' + t('pt.classical') + ' ' + p.scores.classical + '</span>';
+    html += '<span class="pill">' + t('pt.modern') + ' ' + p.scores.modern + '</span>';
+    html += '</div></div>';
+
+    if (p.topTraits && p.topTraits.length) {
+      html += '<div class="section"><h2>' + t('pt.coreTraits') + '</h2>';
+      for (const tr of p.topTraits) {
+        html += '<div class="node-item" style="cursor:default">' +
+          '<div class="row">' + TYPE_TAG(tr.type) + '<span class="tag">' + esc(tr.layer) + '</span>' +
+          '<span class="muted mono">conf=' + tr.confidence.toFixed(2) + '</span></div>' +
+          '<div class="content">' + esc(tr.content) + '</div></div>';
+      }
+      html += '</div>';
+    }
+    el.innerHTML = html;
+  } catch (e) { el.innerHTML = '<p class="muted">' + t('common.loadFailed', esc(e.message)) + '</p>'; }
+}
+
+function axisLabelText(a, kind) {
+  if (lang === 'zh') return a.label;
+  const l = a.lean;
+  if (kind === 'era') {
+    if (l > 0.5) return 'Strongly Classical / Traditional';
+    if (l > 0.15) return 'Leans Classical';
+    if (l < -0.5) return 'Strongly Modern / Utility';
+    if (l < -0.15) return 'Leans Modern';
+    return 'Balanced (Classical/Modern)';
+  }
+  if (l > 0.5) return 'Strongly Eastern / Collective';
+  if (l > 0.15) return 'Leans Eastern';
+  if (l < -0.5) return 'Strongly Western / Individual';
+  if (l < -0.15) return 'Leans Western';
+  return 'Balanced (East/West)';
+}
+function axisView(a) {
+  const isEra = a.label.includes('古典') || a.label.includes('现代');
+  const kind = isEra ? 'era' : 'culture';
+  const ends = kind === 'era' ? [t('axis.modernEnd'), t('axis.classicalEnd')] : [t('axis.west'), t('axis.east')];
+  const label = axisLabelText(a, kind);
+  const pos = ((a.lean + 1) / 2 * 100).toFixed(1);
+  return '<div class="axis"><div class="row" style="margin-bottom:6px"><b>' + esc(label) + '</b>' +
+    '<span class="muted mono">lean=' + a.lean.toFixed(2) + '</span></div>' +
+    '<div class="track"><div class="marker" style="left:' + pos + '%"></div></div>' +
+    '<div class="ends"><span>' + ends[0] + '</span><span>' + ends[1] + '</span></div></div>';
+}
+
+let browseState = { type: '', q: '' };
+async function renderBrowse() {
+  const el = $('#tab-browse');
+  el.innerHTML =
+    '<div class="row section" style="margin-top:0">' +
+    '<input id="q" placeholder="' + t('br.searchPlaceholder') + '" style="flex:1;min-width:220px" value="' + esc(browseState.q) + '">' +
+    '<select id="typeFilter">' +
+      ['','concept','fact','value','culture','experience','episode','definition','assertion','meta']
+        .map(ty => '<option value="' + ty + '"' + (ty===browseState.type?' selected':'') + '>' + (ty||t('br.allTypes')) + '</option>').join('') +
+    '</select>' +
+    '<button class="btn" id="searchBtn">' + t('br.search') + '</button>' +
+    '</div><div id="nodeList"><p class="muted">' + t('common.loading') + '</p></div>';
+  $('#searchBtn').onclick = doSearch;
+  $('#q').onkeydown = (e) => { if (e.key === 'Enter') doSearch(); };
+  $('#typeFilter').onchange = doSearch;
+  loadNodes();
+}
+async function doSearch() {
+  browseState.q = $('#q').value.trim();
+  browseState.type = $('#typeFilter').value;
+  loadNodes();
+}
+async function loadNodes() {
+  const list = $('#nodeList');
+  list.innerHTML = '<p class="muted">' + t('common.loading') + '</p>';
+  try {
+    const params = new URLSearchParams();
+    if (browseState.type) params.set('type', browseState.type);
+    if (browseState.q) params.set('q', browseState.q);
+    params.set('limit', '80');
+    const nodes = await api('/api/nodes?' + params.toString());
+    if (nodes.length === 0) { list.innerHTML = '<p class="muted">' + t('br.noResults') + '</p>'; return; }
+    list.innerHTML = nodes.map(n =>
+      '<div class="node-item" onclick="openNode(\'' + encodeURIComponent(n.id) + '\')">' +
+      '<div class="row">' + TYPE_TAG(n.type) +
+      '<span class="muted mono">imp=' + n.importance.toFixed(2) + '</span>' +
+      '<span class="muted mono">' + fmtAgo(n.createdAt) + '</span></div>' +
+      '<div class="content">' + esc(n.content) + '</div></div>'
+    ).join('');
+  } catch (e) { list.innerHTML = '<p class="muted">' + t('common.loadFailed', esc(e.message)) + '</p>'; }
+}
+
+async function openNode(idEnc) {
+  const id = decodeURIComponent(idEnc);
+  const body = $('#drawerBody');
+  body.innerHTML = '<p class="muted">' + t('common.loading') + '</p>';
+  $('#drawer').classList.add('open');
+  try {
+    const d = await api('/api/node/' + encodeURIComponent(id));
+    const n = d.node;
+    let h = '<div class="row">' + TYPE_TAG(n.type) + '<span class="muted mono">' + esc(n.id.slice(0,12)) + '…</span></div>';
+    h += '<div class="section"><h2>' + t('br.content') + '</h2><textarea id="editContent" style="width:100%;min-height:120px">' + esc(n.content) + '</textarea></div>';
+    h += '<div class="row section">' +
+      '<label class="muted">importance</label><input id="editImp" type="number" step="0.05" min="0" max="1" value="' + n.importance + '" style="width:90px">' +
+      '<label class="muted">type</label><select id="editType">' +
+      ['concept','fact','value','culture','experience','episode','definition','assertion','meta','filler']
+        .map(ty=>'<option value="'+ty+'"'+(ty===n.type?' selected':'')+'>'+ty+'</option>').join('') + '</select></div>';
+    h += '<div class="row section">' +
+      '<button class="btn" onclick="saveNode(\'' + encodeURIComponent(id) + '\')">' + t('br.save') + '</button>' +
+      '<button class="btn danger" onclick="delNode(\'' + encodeURIComponent(id) + '\')">' + t('br.deleteNode') + '</button></div>';
+    h += '<div class="muted mono section">' + t('br.created', fmtTime(n.createdAt)) + ' · ' + t('br.accessed', n.accessCount) + ' · session: ' + esc(n.sourceSession||'—') + '</div>';
+    h += '<div class="section"><h2>' + t('br.linkedEdges', d.edges.length) + '</h2>';
+    if (d.edges.length === 0) h += '<p class="muted">' + t('br.noLinks') + '</p>';
+    for (const e of d.edges) {
+      h += '<div class="edge-item"><div class="row">' +
+        '<span class="tag">' + esc(e.type) + '</span>' +
+        '<span class="muted">' + (e.direction==='out'?'→':'←') + '</span>' +
+        '<span class="mono muted">w=' + e.weight.toFixed(2) + '</span>' +
+        '<span onclick="openNode(\'' + encodeURIComponent(e.otherId) + '\')" style="cursor:pointer;color:var(--accent)">' + esc(e.otherContent) + '</span>' +
+        '<span style="margin-left:auto;cursor:pointer;color:var(--danger)" onclick="delEdge(\'' + encodeURIComponent(e.src) + '\',\'' + encodeURIComponent(e.dst) + '\',\'' + esc(e.type) + '\')">✕</span>' +
+        '</div></div>';
+    }
+    h += '</div>';
+    body.innerHTML = h;
+  } catch (e) { body.innerHTML = '<p class="muted">' + t('common.loadFailed', esc(e.message)) + '</p>'; }
+}
+function closeDrawer() { $('#drawer').classList.remove('open'); }
+
+async function saveNode(idEnc) {
+  const id = decodeURIComponent(idEnc);
+  try {
+    await api('/api/node/' + encodeURIComponent(id), {
+      method: 'PATCH', headers: {'content-type':'application/json'},
+      body: JSON.stringify({ content: $('#editContent').value, importance: parseFloat($('#editImp').value), type: $('#editType').value })
+    });
+    toast(t('br.saved')); loadNodes();
+  } catch (e) { toast(t('br.saveFailed', e.message), true); }
+}
+async function delNode(idEnc) {
+  const id = decodeURIComponent(idEnc);
+  if (!confirm(t('br.confirmDelNode'))) return;
+  try {
+    await api('/api/node/' + encodeURIComponent(id), { method: 'DELETE' });
+    toast(t('br.deleted')); closeDrawer(); loadNodes();
+  } catch (e) { toast(t('br.delFailed', e.message), true); }
+}
+async function delEdge(src, dst, type) {
+  if (!confirm(t('br.confirmDelEdge'))) return;
+  try {
+    await api('/api/edge', { method: 'DELETE', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ src: decodeURIComponent(src), dst: decodeURIComponent(dst), type }) });
+    toast(t('br.edgeDeleted')); openNode(src);
+  } catch (e) { toast(t('br.delFailed', e.message), true); }
+}
+
+async function renderSync() {
+  const el = $('#tab-sync');
+  el.innerHTML = '<p class="muted">' + t('common.loading') + '</p>';
+  try {
+    const s = await api('/api/sync');
+    let html = '<div class="section" style="margin-top:0"><h2>' + t('sy.status') + '</h2>';
+    html += '<table><tbody>';
+    html += syncRow(t('sy.dir'), '<span class="mono">' + esc(s.syncDir) + '</span>');
+    html += syncRow(t('sy.gitInit'), s.hasGit ? t('sy.yes') : t('sy.no'));
+    html += syncRow(t('sy.remote'), s.remote ? '<span class="mono">' + esc(s.remote) + '</span>' : '<span class="muted">' + t('sy.notConfigured') + '</span>');
+    html += syncRow('operations.jsonl', t('sy.opsLines', s.opsLines.toLocaleString(), fmtBytes(s.opsBytes)));
+    html += syncRow(t('sy.lastSync'), s.lastCommitTs ? (fmtTime(s.lastCommitTs) + ' <span class="muted">(' + fmtAgo(s.lastCommitTs) + ')</span>') : '<span class="muted">—</span>');
+    html += syncRow(t('sy.lastCommit'), s.lastCommit ? '<span class="mono">' + esc(s.lastCommit) + '</span>' : '<span class="muted">—</span>');
+    html += syncRow(t('sy.pending'), t('sy.items', s.pendingChanges));
+    html += '</tbody></table></div>';
+
+    html += '<div class="section"><h2>' + t('sy.mergeTitle') + '</h2>' +
+      '<p class="muted">' + t('sy.mergeDesc') + '</p>';
+
+    html += '<div class="card"><div class="row" style="margin-bottom:8px"><b>' + t('sy.methodA') + '</b></div>' +
+      '<div class="row"><input id="gitUrl" placeholder="git@github.com:someone/their-memory.git" style="flex:1;min-width:280px">' +
+      '<button class="btn" id="importGit">' + t('sy.cloneMerge') + '</button></div>' +
+      '<p class="muted" style="margin:6px 0 0;font-size:12px">' + t('sy.methodAHint') + '</p></div>';
+
+    html += '<div class="card" style="margin-top:12px"><div class="row" style="margin-bottom:8px"><b>' + t('sy.methodB') + '</b></div>' +
+      '<div class="row"><input id="filePath" placeholder="/path/to/operations.jsonl" style="flex:1;min-width:280px">' +
+      '<button class="btn ghost" id="importFile">' + t('sy.readMerge') + '</button></div></div>';
+
+    html += '<div id="importResult" class="section"></div>';
+    el.innerHTML = html;
+
+    $('#importGit').onclick = () => runImport({ repoUrl: $('#gitUrl').value.trim() }, $('#importGit'));
+    $('#importFile').onclick = () => runImport({ filePath: $('#filePath').value.trim() }, $('#importFile'));
+  } catch (e) { el.innerHTML = '<p class="muted">' + t('common.loadFailed', esc(e.message)) + '</p>'; }
+}
+function syncRow(k, v) { return '<tr><td style="width:160px;color:var(--muted)">' + k + '</td><td>' + v + '</td></tr>'; }
+
+async function runImport(payload, btn) {
+  const val = payload.repoUrl || payload.filePath;
+  if (!val) { toast(t('sy.needInput'), true); return; }
+  const orig = btn.textContent; btn.textContent = t('sy.merging'); btn.disabled = true;
+  $('#importResult').innerHTML = '<p class="muted">' + t('sy.mergingDesc') + '</p>';
+  try {
+    const r = await api('/api/import', { method: 'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(payload) });
+    $('#importResult').innerHTML = '<div class="card" style="border-color:var(--accent2)">' +
+      '<b style="color:var(--accent2)">' + t('sy.mergeDone') + '</b><table><tbody>' +
+      syncRow(t('sy.source'), '<span class="mono">' + esc(r.source) + '</span>') +
+      syncRow(t('sy.logLines'), r.totalLines) +
+      syncRow(t('sy.applied'), r.applied) +
+      syncRow(t('sy.failed'), r.failed) +
+      '</tbody></table></div>';
+    toast(t('sy.mergeDoneToast', r.applied));
+  } catch (e) {
+    $('#importResult').innerHTML = '<div class="card" style="border-color:var(--danger)"><b style="color:var(--danger)">' + t('sy.mergeFailed') + '</b><p class="muted">' + esc(e.message) + '</p></div>';
+    toast(t('sy.mergeFailed') + ': ' + e.message, true);
+  } finally { btn.textContent = orig; btn.disabled = false; }
+}
+
+applyStaticI18n();
+render('overview');
+</script>
+</body>
+</html>
