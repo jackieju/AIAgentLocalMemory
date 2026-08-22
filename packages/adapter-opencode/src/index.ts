@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, statSync, utimesSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, statSync, utimesSync, unlinkSync, readdirSync, openSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
@@ -32,6 +32,12 @@ function countClaudeTokens(text: string): number {
   if (!text) return 0;
   try { return Math.ceil(claudeTokenizer.encode(text, [], "all").length * newTokenizerMultiplier); }
   catch { return Math.ceil((text.length / 4) * newTokenizerMultiplier); }
+}
+
+// time.created is already ms; blindly *1000 double-scaled it and rendered a 30min gap as "+319d". Threshold 1e12 = year 2001, separates s from ms.
+function toEpochMs(created: number | undefined | null): number {
+  if (!created || created <= 0) return 0;
+  return created >= 1e12 ? created : created * 1000;
 }
 
 interface PluginConfig {
@@ -773,17 +779,117 @@ Return a JSON array. If nothing qualifies, return [].`;
   }, 5 * 60 * 1000);
 
   if (historian) {
-    // Turn-end cooldown trigger (mirrors Claude Code's autoDream). A 2AM cron never fired
-    // because OpenCode is rarely running then; instead maybeRunDreamer() runs once per turn
-    // from the transform hook, does one stat() on a lock file, and bails unless COOLDOWN_MS
-    // elapsed. The lock's mtime IS "last consolidated at"; its body holds the holder PID so a
-    // dead holder's lock can be reclaimed. Cross-process safe.
-    const DREAM_LOCK = join(dataBase, "ai-agent-local-memory", ".dream-lock");
-    const COOLDOWN_MS = 24 * 60 * 60 * 1000; // daily consolidation, mirrors magic-context's nightly cron cadence
-    const HOLDER_STALE_MS = 60 * 60 * 1000;
+    // Dreamer runs ONLY at shutdown of the LAST alive interactive session. Hard requirement:
+    // while ANY OpenCode session is open (active or idle), the Dreamer must NOT run — it must
+    // never steal the LLM mid-turn. A per-session heartbeat registry defines "alive session";
+    // the turn hook is now a no-op; only the process-exit hook can trigger consolidation, and
+    // only when a registry scan shows this is the last one standing. An O_EXCL lock is the final
+    // TOCTOU guard against two simultaneous last-session shutdowns.
+    const MEM_DIR = join(dataBase, "ai-agent-local-memory");
+    const DREAM_LOCK = join(MEM_DIR, ".dream-lock");
+    const SESSIONS_DIR = join(MEM_DIR, "sessions");
+    const HEARTBEAT_MS = 60 * 1000;
+    const HEARTBEAT_STALE_MS = 180 * 1000;
+    const DREAM_TIMEOUT_MS = 5 * 60 * 1000;
     let dreamerRunning = false;
 
+    // Only interactive conversation sessions register + may dream. `opencode serve` (headless)
+    // and transient CLI (`session list`, `--help`) must neither register nor consolidate.
+    const argvJoined = process.argv.join(" ");
+    const isHeadlessOrTransient =
+      process.env.OPENCODE_HEADLESS === "1" ||
+      /\bserve\b/.test(argvJoined) ||
+      /\bsession\b\s+\blist\b/.test(argvJoined) ||
+      /--help\b/.test(argvJoined);
+
+    const OWN_HEARTBEAT = join(SESSIONS_DIR, `${process.pid}.alive`);
+    const registerSession = () => {
+      if (isHeadlessOrTransient) return;
+      try {
+        mkdirSync(SESSIONS_DIR, { recursive: true });
+        writeFileSync(OWN_HEARTBEAT, String(Date.now()));
+      } catch {}
+    };
+    const refreshHeartbeat = () => {
+      if (isHeadlessOrTransient) return;
+      try { utimesSync(OWN_HEARTBEAT, new Date(), new Date()); }
+      catch { try { writeFileSync(OWN_HEARTBEAT, String(Date.now())); } catch {} }
+    };
+    const deregisterSession = () => {
+      try { unlinkSync(OWN_HEARTBEAT); } catch {}
+    };
+
+    // Returns true iff, after pruning zombie heartbeats, NO other interactive session is alive.
+    const isLastAliveSession = (): boolean => {
+      let others = 0;
+      try {
+        const now = Date.now();
+        for (const f of readdirSync(SESSIONS_DIR)) {
+          if (!f.endsWith(".alive")) continue;
+          const pid = parseInt(f.slice(0, -".alive".length), 10);
+          if (!Number.isInteger(pid) || pid <= 0) continue;
+          if (pid === process.pid) continue;
+          const p = join(SESSIONS_DIR, f);
+          let alive = false;
+          try { process.kill(pid, 0); alive = true; } catch { alive = false; }
+          let fresh = false;
+          try { fresh = (now - statSync(p).mtimeMs) < HEARTBEAT_STALE_MS; } catch { fresh = false; }
+          if (alive && fresh) { others++; }
+          else { try { unlinkSync(p); } catch {} } // reap zombie heartbeat
+        }
+      } catch {}
+      return others === 0;
+    };
+
+    // Tiered episode retention (Oracle-designed). Runs after the Dreamer has mined facts.
+    // NEVER touches fact/concept/experience/value/culture nodes. NEVER deletes an unconsolidated
+    // episode. Deletes an episode's dangling edges in the same transaction before the node, so
+    // recall never hits an edge pointing at a missing node.
+    const runEpisodePrune = async () => {
+      const db = rawStorage.getDb();
+      const now = Date.now();
+      const DAY = 24 * 60 * 60 * 1000;
+      const NEAR_MS = 59 * DAY;
+      const OLD_MS = 90 * DAY;
+      const STRENGTH_KEEP = 0.6;
+
+      const isConsolidated = (m: string | null): boolean => {
+        if (!m) return false;
+        try { return (JSON.parse(m) as any)?.consolidated === true; } catch { return false; }
+      };
+      const hasHighValueOutEdge = db.prepare(
+        `SELECT 1 FROM synapses s JOIN nodes n ON n.id = s.dst
+         WHERE s.src = ? AND n.type IN ('fact','concept','experience','value','culture') LIMIT 1`,
+      );
+      const deleteEdges = db.prepare(`DELETE FROM synapses WHERE src = ? OR dst = ?`);
+      const deleteNode = db.prepare(`DELETE FROM nodes WHERE id = ?`);
+      const deleteOne = db.transaction((id: string) => { deleteEdges.run(id, id); deleteNode.run(id); });
+
+      const candidates = db.prepare(
+        `SELECT id, strength, created_at, metadata FROM nodes WHERE type = 'episode' AND created_at < ?`,
+      ).all(now - NEAR_MS) as Array<{ id: string; strength: number; created_at: number; metadata: string | null }>;
+
+      let deleted = 0;
+      for (const ep of candidates) {
+        if (!isConsolidated(ep.metadata)) continue;
+        const age = now - ep.created_at;
+        const linked = !!hasHighValueOutEdge.get(ep.id);
+        let keep: boolean;
+        if (age >= OLD_MS) {
+          keep = linked;
+        } else {
+          keep = linked || (typeof ep.strength === "number" && ep.strength >= STRENGTH_KEEP);
+        }
+        if (!keep) { deleteOne(ep.id); deleted++; }
+      }
+      if (deleted > 0) {
+        try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [episode-prune] deleted ${deleted} episodes\n`, { flag: "a" }); } catch {}
+      }
+    };
+
     const runDreamer = async () => {
+
+
       try {
         const recentEpisodes = await storage.queryNodes({ type: "episode", sourceSession: sessionId, limit: 20 });
         if (recentEpisodes.length < 5) return;
@@ -979,51 +1085,98 @@ JSON array of stale indexes:`;
         } catch (pruneErr: any) {
           try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [prune] ${pruneErr?.message ?? pruneErr}\n${pruneErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
         }
+
+        // Mark the episodes we just consumed as consolidated so episode-prune may retire them
+        // later. Unconsolidated episodes are NEVER pruned (Dreamer hasn't mined facts from them).
+        try {
+          const db = rawStorage.getDb();
+          const mark = db.prepare(
+            `UPDATE nodes SET metadata = json_set(COALESCE(metadata,'{}'), '$.consolidated', json('true')) WHERE id = ?`,
+          );
+          const markMany = db.transaction((ids: string[]) => { for (const id of ids) mark.run(id); });
+          markMany(recentEpisodes.map((e) => e.id));
+        } catch (markErr: any) {
+          try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [mark] ${markErr?.message ?? markErr}\n`, { flag: "a" }); } catch {}
+        }
+
+        try { await runEpisodePrune(); } catch (pErr: any) {
+          try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [episode-prune] ${pErr?.message ?? pErr}\n${pErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
+        }
       } catch (dreamErr: any) {
         try { writeFileSync("/tmp/neural-dream-error.log", `${Date.now()} [dream] ${dreamErr?.message ?? dreamErr}\n${dreamErr?.stack ?? ""}\n`, { flag: "a" }); } catch {}
       }
     };
 
-    // Cheap, cross-process-safe cooldown gate. Called once per turn from the transform hook.
-    const maybeRunDreamer = async () => {
-      if (dreamerRunning) return;
-      const now = Date.now();
+    // O_EXCL mutex: file exists <=> a live dreamer holds it. Final TOCTOU guard when two
+    // last-session shutdowns race. No mtime/cooldown semantics anymore.
+    const tryAcquireDreamLock = (): boolean => {
       try {
-        const st = statSync(DREAM_LOCK);
-        const age = now - st.mtimeMs;
-        if (age < COOLDOWN_MS) {
-          // Cooldown not elapsed — unless the lock is held by a dead holder AND itself stale.
-          let holderAlive = false;
-          try {
-            const pid = parseInt(readFileSync(DREAM_LOCK, "utf-8").trim(), 10);
-            if (Number.isInteger(pid) && pid > 0) {
-              try { process.kill(pid, 0); holderAlive = true; } catch { holderAlive = false; }
-            }
-          } catch {}
-          if (holderAlive || age < HOLDER_STALE_MS) return;
-        }
+        mkdirSync(MEM_DIR, { recursive: true });
+        const fd = openSync(DREAM_LOCK, "wx");
+        writeFileSync(fd, String(process.pid));
+        closeSync(fd);
+        return true;
       } catch {
-        // No lock file yet → first run is allowed.
+        let holderAlive = false;
+        try {
+          const pid = parseInt(readFileSync(DREAM_LOCK, "utf-8").trim(), 10);
+          if (Number.isInteger(pid) && pid > 0) {
+            try { process.kill(pid, 0); holderAlive = true; } catch { holderAlive = false; }
+          }
+        } catch {}
+        if (holderAlive) return false;
+        try { unlinkSync(DREAM_LOCK); } catch {}
+        try {
+          const fd = openSync(DREAM_LOCK, "wx");
+          writeFileSync(fd, String(process.pid));
+          closeSync(fd);
+          return true;
+        } catch { return false; }
       }
-      // Claim the lock: write our PID and bump mtime to now. This is the "last consolidated at".
+    };
+    const releaseDreamLock = () => { try { unlinkSync(DREAM_LOCK); } catch {} };
+
+    // Consolidate only if this is the last alive interactive session, with a hard timeout so
+    // OpenCode's exit is never blocked by a hung LLM proxy.
+    const runDreamerIfLastSession = async () => {
+      if (dreamerRunning || isHeadlessOrTransient) return;
+      if (!isLastAliveSession()) return;
+      if (!tryAcquireDreamLock()) return;
       dreamerRunning = true;
       try {
-        mkdirSync(join(dataBase, "ai-agent-local-memory"), { recursive: true });
-        writeFileSync(DREAM_LOCK, String(process.pid));
-        utimesSync(DREAM_LOCK, new Date(), new Date());
-      } catch {}
-      try {
-        await runDreamer();
+        await Promise.race([
+          runDreamer(),
+          new Promise<void>((resolve) => setTimeout(resolve, DREAM_TIMEOUT_MS)),
+        ]);
       } finally {
-        // Refresh mtime on completion so the full cooldown counts from finish, not start.
-        try { utimesSync(DREAM_LOCK, new Date(), new Date()); } catch {}
+        releaseDreamLock();
         dreamerRunning = false;
       }
     };
 
-    // Expose the gate so the transform hook can trigger it once per turn.
-    (globalThis as any).__neuralMaybeRunDreamer = maybeRunDreamer;
+    registerSession();
+    const heartbeatTimer = setInterval(refreshHeartbeat, HEARTBEAT_MS);
+    if (typeof (heartbeatTimer as any)?.unref === "function") (heartbeatTimer as any).unref();
+
+    let shutdownHandled = false;
+    const onShutdown = () => {
+      if (shutdownHandled) return;
+      shutdownHandled = true;
+      clearInterval(heartbeatTimer);
+      deregisterSession();
+      // Sync trigger: exit handlers can't await. We only spend the shutdown budget when this
+      // is provably the last session; the lock + registry make double-runs safe.
+      void runDreamerIfLastSession();
+    };
+    process.on("exit", onShutdown);
+    process.on("SIGINT", () => { onShutdown(); });
+    process.on("SIGTERM", () => { onShutdown(); });
+
+    // Turn hook is now a no-op: the Dreamer NEVER runs while a session is open (user's hard
+    // requirement). Kept exported so the transform hook call site stays valid.
+    (globalThis as any).__neuralMaybeRunDreamer = async () => {};
   }
+
 
   if (existsSync(join(syncDir, ".git"))) {
     syncTimer = setInterval(async () => {
@@ -1776,7 +1929,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
 
           if (args.since) {
             const sinceMs = new Date(args.since).getTime();
-            sessions = sessions.filter((s) => s.time.created >= sinceMs / 1000);
+            sessions = sessions.filter((s) => toEpochMs(s.time.created) >= sinceMs);
           }
 
           if (args.limit) {
@@ -1800,7 +1953,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
                   .map((p) => ({
                     role: role as "user" | "assistant",
                     content: (p as { text: string }).text,
-                    timestamp: msg.info.time?.created ? msg.info.time.created * 1000 : undefined,
+                    timestamp: toEpochMs(msg.info.time?.created) || undefined,
                   }));
               });
 
@@ -2377,7 +2530,7 @@ List the angles in 1-2 sentences each. Be concise.`;
             const sessionsResult = await client.session.list();
             if (!sessionsResult.data) return { title: "Error", output: "Failed to list sessions." };
             const sessions = sessionsResult.data.slice(0, 20);
-            const list = sessions.map((s, i) => `${i + 1}. ${s.id} — "${s.title}" (${new Date(s.time.created * 1000).toLocaleDateString()})`).join("\n");
+            const list = sessions.map((s, i) => `${i + 1}. ${s.id} — "${s.title}" (${new Date(toEpochMs(s.time.created)).toLocaleDateString()})`).join("\n");
             return { title: `${sessions.length} recent sessions`, output: list };
           }
 
@@ -2931,7 +3084,7 @@ List the angles in 1-2 sentences each. Be concise.`;
           }
 
           const isProtected = isPinned || tagCounter > protectedFloor;
-          const ts = msg.info?.time?.created ? msg.info.time.created * 1000 : 0;
+          const ts = toEpochMs(msg.info?.time?.created);
 
           if (prevTimestamp > 0 && ts > 0 && msg.info?.role === "user") {
             const gap = ts - prevTimestamp;
@@ -3218,7 +3371,7 @@ List the angles in 1-2 sentences each. Be concise.`;
         const hasUncoveredNewMessages = (() => {
           if (lastCompressTime === 0) return false;
           for (let i = tailStart; i < messages.length; i++) {
-            const msgTime = messages[i].info?.time?.created ? messages[i].info.time.created * 1000 : 0;
+            const msgTime = toEpochMs(messages[i].info?.time?.created);
             if (msgTime > lastCompressTime) return true;
           }
           return false;
