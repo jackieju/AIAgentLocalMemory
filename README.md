@@ -1,10 +1,12 @@
 # AIAgentLocalMemory
 
-Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spreading activation, and a working memory queue instead of traditional database queries.
+<!--Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spreading activation, and a working memory queue instead of traditional database queries.
 
 **Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time. Dont' waste any token any chat any dollar in your daily talk with LLM, which can make your local LLM smarter everyday.
-
+-->
 ## Features
+
+## Agent context and entertprise memory management
 
 - **Unlimited context management** — long history is transparently compressed into `<compartment>` summaries by a background historian while the recent tail stays full-fidelity, so conversations don't hit a token wall.
 - **Neural memory** — an associative graph (nodes + weighted synapses, Hebbian learning, spreading activation, working memory) recalls by meaning and association instead of keyword match.
@@ -12,11 +14,16 @@ Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spre
 - **Cross-machine memory sync** — the memory graph replicates between machines through a Git-backed append-only operation log (conflict-free, `neural_sync` push / pull / status).
 - **Cross-device session sync** — the full raw OpenCode session (messages, tool calls, reasoning) can be replayed on a second machine via `neural_session_import`, so you switch computers and keep writing where you left off.
 - **Multilingual & semantic search** — SQLite FTS5 with `Intl.Segmenter` for CJK, plus optional embedding-based semantic recall through any OpenAI-compatible or Ollama endpoint.
-- **Growing local agent** — an optional local LLM (Qwen3 14B via Ollama by default) that runs in three modes — Observer (silently learns from the server LLM), Student (auto-escalates when unsure), or Primary (fully autonomous) — with a LoRA fine-tune pipeline that trains on divergence-filtered Q&A pairs and rolls back on regression.
-- **Escalation on demand** — `neural_ask_server` lets the local agent consult the server LLM with a structured `[Reasoning] + [Answer]` prompt and stores every response as a reusable experience node.
 - **Automatic session persistence** — every conversation is mirrored to a readable Markdown transcript, and the underlying `opencode.db` is gzip-backed up daily to iCloud.
 - **Live TUI sidebar** — memory graph stats, sync state, context compression ratio, and LoRA training progress are visible directly inside the OpenCode sidebar.
-- **Magic-context coexistence** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks while keeping the neural tools available.
+- **Coexistence with 3rd party context manager(magic-context)** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks while keeping the neural tools available.
+
+
+- ## Growing agent
+- **Growing local agent** — an optional local LLM (Qwen3 14B via Ollama by default) that runs in three modes — Observer (silently learns from the server LLM), Student (auto-escalates when unsure), or Primary (fully autonomous) — with a LoRA fine-tune pipeline that trains on divergence-filtered Q&A pairs and rolls back on regression.
+- **Escalation on demand** — `neural_ask_server` lets the local agent consult the server LLM with a structured `[Reasoning] + [Answer]` prompt and stores every response as a reusable experience node.
+- **Human common sense** Human common sense and moral is the real security ensuring. Agent will periodically ask for reading classic book like 《论语》 to get what is humanity and moral.
+  
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
