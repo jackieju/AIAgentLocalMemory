@@ -20,7 +20,7 @@
 - **Coexistence with 3rd party context manager(magic-context)** — auto-detects `@cortexkit/opencode-magic-context` and disables conflicting hooks while keeping the neural tools available.
 
 
-- ### Growing agent
+### Growing agent
 - **Growing local agent** — an optional local LLM (Qwen3 14B via Ollama by default) that runs in three modes — Observer (silently learns from the server LLM), Student (auto-escalates when unsure), or Primary (fully autonomous) — with a LoRA fine-tune pipeline that trains on divergence-filtered Q&A pairs and rolls back on regression.
 - **Escalation on demand** — `neural_ask_server` lets the local agent consult the server LLM with a structured `[Reasoning] + [Answer]` prompt and stores every response as a reusable experience node.
 - **Human common sense** Human common sense and moral is the real security ensuring. Agent will periodically ask for reading classic book like 《论语》 to get what is humanity and moral.
