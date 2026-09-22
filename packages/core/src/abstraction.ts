@@ -19,6 +19,9 @@ const IMPORTANCE: Record<NodeType, number> = {
   filler: 0.2,
   meta: 0.9,
   fact: 0.9,
+  experience: 0.9,
+  value: 0.9,
+  culture: 0.9,
 };
 
 const MAX_EPISODE_CHARS = 10_000;

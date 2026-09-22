@@ -387,15 +387,51 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       const list = getSessionMessageList(sid);
       const wanted = list.filter((m) => m.ord >= startOrd && m.ord <= endOrd);
       if (wanted.length === 0) return [];
+      // Historian MUST summarize tool outputs, not just text: tool parts are the token
+      // bulk (count ~= text parts but each output is KBs). Reading only type='text'
+      // discarded ~87% of the payload, making compression a no-op on tool-heavy sessions.
       const partStmt = openCodeDb.prepare(
-        `SELECT json_extract(data, '$.text') AS text, json_extract(data, '$.type') AS type
+        `SELECT json_extract(data, '$.text') AS text,
+                json_extract(data, '$.type') AS type,
+                json_extract(data, '$.tool') AS tool,
+                json_extract(data, '$.state.input') AS toolInput,
+                json_extract(data, '$.state.output') AS toolOutput,
+                json_extract(data, '$.state.error') AS toolError
          FROM opencode.part WHERE session_id = ? AND message_id = ? ORDER BY id ASC`
       );
+      const TOOL_INPUT_CAP = 200;
+      const TOOL_OUTPUT_CAP = 800;
+      const MSG_CONTENT_CAP = 2000;
       return wanted.map((m) => {
         let content = "";
         try {
-          const rows = partStmt.all(sid, m.id) as Array<{ text: string | null; type: string | null }>;
-          content = rows.filter((r) => r.type === "text" && r.text).map((r) => r.text).join("\n").slice(0, 1000);
+          const rows = partStmt.all(sid, m.id) as Array<{
+            text: string | null; type: string | null; tool: string | null;
+            toolInput: string | null; toolOutput: string | null; toolError: string | null;
+          }>;
+          const chunks: string[] = [];
+          for (const r of rows) {
+            if (r.type === "text" && r.text) {
+              chunks.push(r.text);
+            } else if (r.type === "tool") {
+              // Serialize tool call as "[tool: name] input → output" so the historian can
+              // summarize what the tool did and what it returned. state.input/output are
+              // JSON-extracted scalars: strings come back verbatim, objects come back as
+              // JSON text. Prefer the (usually short) title/error over a huge output.
+              const name = r.tool ?? "tool";
+              // Sentinel marks mid-string truncation so the historian does not summarize
+              // a chopped-off tool output as if it were the complete result.
+              const cap = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…[truncated]" : s);
+              const inp = r.toolInput ? cap(String(r.toolInput), TOOL_INPUT_CAP) : "";
+              const out = r.toolError
+                ? `ERROR: ${cap(String(r.toolError), TOOL_OUTPUT_CAP)}`
+                : (r.toolOutput ? cap(String(r.toolOutput), TOOL_OUTPUT_CAP) : "");
+              if (inp || out) {
+                chunks.push(`[tool: ${name}]${inp ? ` in=${inp}` : ""}${out ? ` → ${out}` : ""}`);
+              }
+            }
+          }
+          content = chunks.join("\n").slice(0, MSG_CONTENT_CAP);
         } catch {}
         return { ord: m.ord, id: m.id, role: m.role, content };
       });
@@ -1413,7 +1449,9 @@ JSON:`;
                   p1: String(parsed.p1),
                   p2: String(parsed.p2),
                   p3: String(parsed.p3),
-                  tokenCount: Math.round(windowMsgs.reduce((s, m) => s + m.content.length, 0) / 4),
+                  // tokenCount = size of the STORED summary, not the input transcript.
+                  // Keep consistent with historian.compress() so budget math never over-counts.
+                  tokenCount: Math.round((String(parsed.p1).length + String(parsed.p2).length + String(parsed.p3).length) / 4),
                   createdAt: Date.now(),
                 });
                 historianFailureCount = 0;

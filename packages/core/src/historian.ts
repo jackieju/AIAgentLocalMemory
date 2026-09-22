@@ -35,7 +35,7 @@ p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/sy
 p2: One sentence (≤25 tokens). The single most important thing that happened.
 p3: A title (≤8 tokens). Like a git commit subject.
 
-Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.`;
+Transcript lines shaped "[tool: NAME] in=... → ..." are tool calls and their results — these carry the bulk of the work (files read, commands run, outputs returned). Summarize what each tool found or produced (key results, values, errors), not that a tool ran. Preserve concrete identifiers verbatim: file paths, function names, error strings, key output values. Drop pleasantries.`;
 
 export class Historian {
   private config: { llm: LLMProvider; fallbackModels: string[]; minWindow: number; maxWindow: number };
@@ -118,7 +118,9 @@ export class Historian {
         p1: String(parsed.p1),
         p2: String(parsed.p2),
         p3: String(parsed.p3),
-        tokenCount: Math.round(transcript.length / 4),
+        // tokenCount = size of the STORED summary, not the input transcript. Deriving
+        // it from (now tool-inflated) input would over-count downstream budget math.
+        tokenCount: Math.round((String(parsed.p1).length + String(parsed.p2).length + String(parsed.p3).length) / 4),
         createdAt: Date.now(),
       };
     } catch {
