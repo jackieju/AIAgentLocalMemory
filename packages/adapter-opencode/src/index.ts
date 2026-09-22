@@ -3003,6 +3003,44 @@ List the angles in 1-2 sentences each. Be concise.`;
             Math.min(tailStart, messages.length),
             messages.length - HARD_TAIL_CAP,
           );
+
+          // Protect line: anchor the LAST TWO meaningful user turns so a cross-turn
+          // reference survives (user answers "C" pointing at the assistant's A/B/C from
+          // the PREVIOUS turn). magic-context anchors only the last turn; that leaves the
+          // referenced assistant on the wrong side of the line, so we keep one extra turn.
+          const hasMeaningfulUserText = (msg: any): boolean => {
+            if (msg?.info?.role !== "user") return false;
+            let combined = "";
+            for (const part of (msg.parts ?? [])) {
+              if (part?.type === "text" && typeof part.text === "string") combined += part.text;
+            }
+            let t = combined.replace(/^§\d+§\s*/, "").trim();
+            if (t === "") return false;
+            if (t.startsWith("<system-reminder>")) return false;
+            if (/^\[(analyze-mode|search-mode|CONTEXT)/.test(t)) return false;
+            if (/^<!--[\s\S]*-->$/.test(t)) return false;
+            return true;
+          };
+          let meaningfulSeen = 0;
+          let protectLine = messages.length;
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (hasMeaningfulUserText(messages[i])) {
+              meaningfulSeen++;
+              protectLine = i;
+              if (meaningfulSeen >= 2) break;
+            }
+          }
+          if (protectLine === messages.length && openCodeDb) {
+            try {
+              const row = openCodeDb.prepare(
+                `SELECT id FROM opencode.message WHERE session_id = ? AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1`,
+              ).get(openCodeSessionId) as { id: string } | undefined;
+              if (row?.id && msgIdToIndex.has(row.id)) {
+                protectLine = msgIdToIndex.get(row.id) as number;
+              }
+            } catch {}
+          }
+
           let tailTokens = 0;
           let startIdx = messages.length;
           for (let i = messages.length - 1; i >= floor; i--) {
@@ -3012,8 +3050,13 @@ List the angles in 1-2 sentences each. Be concise.`;
             startIdx = i;
           }
 
+          // Clamp the budget result forward to the protect line (unconditional — no
+          // usage<80 gate, so a referenced turn never drops at any usage level). Must run
+          // after the scan and before hysteresis.
+          startIdx = Math.min(startIdx, protectLine);
+
           if (lastTailStartIdx >= floor && lastTailStartIdx <= startIdx + 5 && lastTailStartIdx < messages.length) {
-            startIdx = lastTailStartIdx;
+            startIdx = Math.min(lastTailStartIdx, protectLine);
           }
           lastTailStartIdx = startIdx;
 
@@ -3101,6 +3144,23 @@ List the angles in 1-2 sentences each. Be concise.`;
             }
             if (typeof (part as any).content === "string" && (part as any).content.length > TOOL_OUTPUT_MAX_CHARS) {
               (part as any).content = (part as any).content.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n…[tool output truncated for context]";
+            }
+          }
+        }
+
+        // Protected tail keeps text verbatim, but a single huge tool output could still
+        // blow the whole prompt past the model limit. Cap tool output here (wider than the
+        // non-protected 4000 cap) — text parts are never touched, only tool results.
+        const PROTECTED_TOOL_OUTPUT_MAX_CHARS = 16000;
+        const protectTailStartInTail = Math.max(0, protectLine - tailActualStart);
+        for (let i = protectTailStartInTail; i < tail.length; i++) {
+          for (const part of (tail[i].parts ?? [])) {
+            const st = (part as any).state;
+            if (st && typeof st.output === "string" && st.output.length > PROTECTED_TOOL_OUTPUT_MAX_CHARS) {
+              st.output = st.output.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + "\n…[protected tail tool output capped]";
+            }
+            if (typeof (part as any).content === "string" && (part as any).content.length > PROTECTED_TOOL_OUTPUT_MAX_CHARS) {
+              (part as any).content = (part as any).content.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + "\n…[protected tail tool output capped]";
             }
           }
         }
@@ -3711,11 +3771,46 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
         const msgsResult = await client.session.messages({ path: { id: sid }, query: {} });
         if (!msgsResult.data) return;
 
+        // RED LINE: transcript MD is the verbatim archive — mirror the session byte-for-byte,
+        // INCLUDING tool input/output and reasoning. A prior refactor filtered this to text-only
+        // and silently dropped every tool output; do NOT revert to text-only.
         const allMessages: string[] = [];
         for (const msg of msgsResult.data) {
           const role = msg.info.role;
-          const textParts = (msg.parts ?? []).filter((p: any) => p.type === "text");
-          const content = textParts.map((p: any) => (p as { text?: string }).text ?? "").join("\n").trim();
+          const blocks: string[] = [];
+          for (const p of (msg.parts ?? []) as any[]) {
+            switch (p.type) {
+              case "text": {
+                const t = (p.text ?? "").trim();
+                if (t) blocks.push(t);
+                break;
+              }
+              case "reasoning": {
+                const t = (p.text ?? "").trim();
+                if (t) blocks.push(`<reasoning>\n${t}\n</reasoning>`);
+                break;
+              }
+              case "tool": {
+                const st = p.state ?? {};
+                const name = p.tool ?? "unknown";
+                const input = st.input !== undefined ? JSON.stringify(st.input) : "";
+                const output = typeof st.output === "string"
+                  ? st.output
+                  : st.output !== undefined ? JSON.stringify(st.output) : "";
+                const errPart = st.status === "error" && st.error ? `\nerror: ${st.error}` : "";
+                blocks.push(
+                  `<tool name="${name}" status="${st.status ?? ""}">\n` +
+                  `input: ${input}\n` +
+                  `output:\n${output}${errPart}\n` +
+                  `</tool>`,
+                );
+                break;
+              }
+              default:
+                break;
+            }
+          }
+          const content = blocks.join("\n\n").trim();
           if (!content) continue;
           allMessages.push(`[${role}] ${content}\n\n---\n`);
         }
