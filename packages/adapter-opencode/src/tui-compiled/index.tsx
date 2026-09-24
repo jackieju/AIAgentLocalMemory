@@ -31,7 +31,7 @@ function getServerBuild() {
   } catch {}
   return "?";
 }
-function getStats() {
+function getStats(sessionId) {
   const dataDir = join(homedir(), ".local/share/ai-agent-local-memory");
   const dbPath = join(dataDir, "graph.db");
   const syncDir = join(dataDir, "sync");
@@ -80,7 +80,7 @@ function getStats() {
   } catch {}
   let compartmentStatus = null;
   try {
-    const csPath = "/tmp/neural-compartment-status.json";
+    const csPath = sessionId ? `/tmp/neural-compartment-status-${sessionId}.json` : "/tmp/neural-compartment-status.json";
     if (existsSync(csPath)) {
       compartmentStatus = JSON.parse(readFileSync(csPath, "utf-8"));
     }
@@ -143,14 +143,13 @@ function createSidebarSlot(api) {
     order: 200,
     slots: {
       sidebar_content: (_ctx, value) => {
-        const [stats, setStats] = createSignal(getStats());
-        const timer = setInterval(() => setStats(getStats()), 30000);
-        onCleanup(() => clearInterval(timer));
-
         // SolidJS: keep value.session_id a getter. OpenCode passes it in the
         // second slot arg and injects it after mount, so a one-time read
         // captures an empty value forever.
         const sessionId = () => value.session_id;
+        const [stats, setStats] = createSignal(getStats(sessionId()));
+        const timer = setInterval(() => setStats(getStats(sessionId())), 30000);
+        onCleanup(() => clearInterval(timer));
         const sessionShort = createMemo(() => {
           const sid = sessionId();
           return sid ? sid.slice(0, 12) : "—";

@@ -28,6 +28,28 @@ const NEW_TOKENIZER_PATTERN = /(opus-4[.-](?:[7-9]|1[0-9])|claude-4[.-](?:[7-9]|
 function setActiveTokenizerModel(modelKey: string | undefined | null): void {
   newTokenizerMultiplier = modelKey && NEW_TOKENIZER_PATTERN.test(modelKey) ? 1.3 : 1.0;
 }
+
+// Denominator for usage %. Config `contextWindowTokens` overrides at call sites.
+// modelKey is "providerID/modelID" or bare modelID; hai proxy may use double-dash
+// (anthropic--claude-4.8-opus), so rules match on substrings not exact ids.
+const CONTEXT_WINDOW_RULES: Array<{ re: RegExp; window: number }> = [
+  // GPT-5.x / GPT-6 family: 400K
+  { re: /gpt-(5[.-]|6[.-]|5$|6$|6-)/i, window: 400000 },
+  // Kimi K3/K2 (Moonshot): 256K
+  { re: /kimi-k[23]/i, window: 256000 },
+  // DeepSeek V4/V3: 128K
+  { re: /deepseek-v[34]/i, window: 128000 },
+  // Claude Opus / Sonnet / Haiku / Fable / Mythos (4.x, 5.x): 200K
+  { re: /(opus|sonnet|haiku|fable|mythos)/i, window: 200000 },
+];
+function resolveContextWindow(modelKey: string | undefined | null): number {
+  if (modelKey) {
+    for (const rule of CONTEXT_WINDOW_RULES) {
+      if (rule.re.test(modelKey)) return rule.window;
+    }
+  }
+  return 128000;
+}
 function countClaudeTokens(text: string): number {
   if (!text) return 0;
   try { return Math.ceil(claudeTokenizer.encode(text, [], "all").length * newTokenizerMultiplier); }
@@ -350,11 +372,13 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
         WHERE session_id = ?
           AND json_extract(data, '$.role') = 'assistant'
           AND data IS NOT NULL
+          AND json_extract(data, '$.finish') IS NOT NULL
+          AND json_extract(data, '$.finish') != ''
         ORDER BY time_created DESC
         LIMIT 1
       `).get(sid) as { prompt: number } | undefined;
       if (!row) return { percentage: 0, inputTokens: 0 };
-      const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+      const contextLimit = pluginConfig.contextWindowTokens ?? resolveContextWindow(lastModelKey);
       return { percentage: (row.prompt / contextLimit) * 100, inputTokens: row.prompt };
     } catch { return { percentage: 0, inputTokens: 0 }; }
   }
@@ -666,13 +690,15 @@ Return a JSON array. If nothing qualifies, return [].`;
         try {
           const req = JSON.parse(data.toString());
           let res: any = {};
+          // RED LINE: compartments are keyed by real ses_xxx, NOT directory-hash sessionId. Never revert to sessionId (sidebar would show 0).
+          const rpcSid = currentOpenCodeSessionId || sessionId;
           if (req.method === "status") {
-            const usage = getContextUsage(sessionId);
-            const compartments = compartmentStore.getForSession(sessionId);
+            const usage = getContextUsage(rpcSid);
+            const compartments = compartmentStore.getForSession(rpcSid);
             const nodeCount = await storage.getNodeCount();
             res = { build: SERVER_BUILD, usage, compartments: compartments.length, nodes: nodeCount, historianFailures: 0, model: "" };
           } else if (req.method === "compartments") {
-            res = { compartments: compartmentStore.getForSession(sessionId) };
+            res = { compartments: compartmentStore.getForSession(rpcSid) };
           }
           conn.write(JSON.stringify(res) + "\n");
         } catch { conn.write("{}\n"); }
@@ -701,7 +727,7 @@ Return a JSON array. If nothing qualifies, return [].`;
           LIMIT 1
         `).get(sid) as { prompt: number } | undefined;
         if (!row) return;
-        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
+        const contextLimit = pluginConfig.contextWindowTokens ?? resolveContextWindow(lastModelKey);
         const pct = (row.prompt / contextLimit) * 100;
         if (pct >= 90) {
           const comps = compartmentStore.getForSession(sid);
@@ -2830,23 +2856,6 @@ List the angles in 1-2 sentences each. Be concise.`;
           return w;
         };
 
-        const contextLimit = pluginConfig.contextWindowTokens ?? 128000;
-        const EXECUTE_THRESHOLD = 65;
-        const HISTORY_BUDGET_PCT = 0.15;
-        const PROTECTED_TAGS_COUNT = pluginConfig.protectedTags ?? 20;
-        const CLEAR_REASONING_AGE = 50;
-        const TRIGGER_BUDGET_PCT = 0.05;
-        const TRIGGER_MULTIPLIER = 3;
-        const HISTORIAN_CHUNK_PCT = 0.25;
-        const FORCE_COMPARTMENT_PCT = 80;
-        const TARGET_USAGE_PCT = 0.55;
-        const ABORT_PCT = 95;
-        const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
-        const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
-
-        const realUsage = getContextUsage(openCodeSessionId);
-        const usagePct = realUsage.percentage;
-
         const lastAssistantModel = (() => {
           for (let i = messages.length - 1; i >= 0; i--) {
             const info = messages[i].info;
@@ -2869,6 +2878,23 @@ List the angles in 1-2 sentences each. Be concise.`;
         }
 
         setActiveTokenizerModel(lastAssistantModel?.modelID ?? lastModelKey);
+
+        const contextLimit = pluginConfig.contextWindowTokens ?? resolveContextWindow(lastModelKey);
+        const EXECUTE_THRESHOLD = 65;
+        const HISTORY_BUDGET_PCT = 0.15;
+        const PROTECTED_TAGS_COUNT = pluginConfig.protectedTags ?? 20;
+        const CLEAR_REASONING_AGE = 50;
+        const TRIGGER_BUDGET_PCT = 0.05;
+        const TRIGGER_MULTIPLIER = 3;
+        const HISTORIAN_CHUNK_PCT = 0.25;
+        const FORCE_COMPARTMENT_PCT = 80;
+        const TARGET_USAGE_PCT = 0.55;
+        const ABORT_PCT = 95;
+        const historyBudgetTokens = Math.round(contextLimit * HISTORY_BUDGET_PCT);
+        const triggerBudget = Math.max(5000, Math.min(50000, Math.round(contextLimit * TRIGGER_BUDGET_PCT)));
+
+        const realUsage = getContextUsage(openCodeSessionId);
+        const usagePct = realUsage.percentage;
 
         if (realUsage.percentage > 0) {
           lastContextPercentage = realUsage.percentage;
@@ -2987,6 +3013,9 @@ List the angles in 1-2 sentences each. Be concise.`;
             }
           }
         }
+        // #280 incident: keep this at outer (tail) scope — line ~3185 reads it. If moved
+        // into the bare block below, it vanishes after `}` → ReferenceError → no compression.
+        let protectLine = messages.length;
         {
           // Always run the token-budget scan from the end backward — never emit the
           // whole array unbounded. The removed `if (messages.length <= tailStart)`
@@ -3004,10 +3033,20 @@ List the angles in 1-2 sentences each. Be concise.`;
             messages.length - HARD_TAIL_CAP,
           );
 
-          // Protect line: anchor the LAST TWO meaningful user turns so a cross-turn
-          // reference survives (user answers "C" pointing at the assistant's A/B/C from
-          // the PREVIOUS turn). magic-context anchors only the last turn; that leaves the
-          // referenced assistant on the wrong side of the line, so we keep one extra turn.
+          // Protect line (HARDENED — see incident build #277: naive Math.min(startIdx,
+          // protectLine) dragged startIdx to ~5 on a giant session, pulling 5165 raw msgs
+          // → prompt is too long: 3877621 tokens > 1000000). Intent unchanged: anchor the
+          // LAST TWO meaningful user turns so a cross-turn reference survives (user answers
+          // "C" pointing at the assistant's A/B/C from the PREVIOUS turn). But now four
+          // guardrails make it PHYSICALLY incapable of blowing the budget, aligned with
+          // magic-context's resolveProtectedTailBoundary:
+          //   (a) span cap   — never look back past MAX_PROTECT_SPAN messages
+          //   (b) floor hard bottom — startIdx never escapes below `floor` (HARD_TAIL_CAP=500)
+          //   (c) token ceiling — protect pull-back can't push tail past PROTECT_TOTAL_MULT×budget
+          //   (d) pressure gate — only extend when usagePct < PROTECT_MAX_USAGE_PCT (0/unknown=allow)
+          const MAX_PROTECT_SPAN = 80;        // msgs: enough for ~2 turns even in heavy-tool sessions
+          const PROTECT_TOTAL_MULT = 1.3;     // tail may exceed base budget by at most 30% for protection
+          const PROTECT_MAX_USAGE_PCT = 70;   // above this, skip protection and stay aggressive
           const hasMeaningfulUserText = (msg: any): boolean => {
             if (msg?.info?.role !== "user") return false;
             let combined = "";
@@ -3021,22 +3060,28 @@ List the angles in 1-2 sentences each. Be concise.`;
             if (/^<!--[\s\S]*-->$/.test(t)) return false;
             return true;
           };
+
+          // Guard (a)+(b) folded into the scan lower bound so protectLine can NEVER land at ~5.
+          const protectFloor = Math.max(floor, messages.length - MAX_PROTECT_SPAN);
           let meaningfulSeen = 0;
-          let protectLine = messages.length;
-          for (let i = messages.length - 1; i >= 0; i--) {
+          protectLine = messages.length;   // hoisted declaration above; assign only
+          for (let i = messages.length - 1; i >= protectFloor; i--) {   // bounded scan, never to 0
             if (hasMeaningfulUserText(messages[i])) {
               meaningfulSeen++;
               protectLine = i;
               if (meaningfulSeen >= 2) break;
             }
           }
+          // DB fallback: only adopt the hit if it lands inside the protect span, else ignore
+          // (never drag startIdx back into already-compressed territory).
           if (protectLine === messages.length && openCodeDb) {
             try {
               const row = openCodeDb.prepare(
                 `SELECT id FROM opencode.message WHERE session_id = ? AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1`,
               ).get(openCodeSessionId) as { id: string } | undefined;
               if (row?.id && msgIdToIndex.has(row.id)) {
-                protectLine = msgIdToIndex.get(row.id) as number;
+                const dbIdx = msgIdToIndex.get(row.id) as number;
+                if (dbIdx >= protectFloor) protectLine = dbIdx;   // span-bounded only
               }
             } catch {}
           }
@@ -3050,13 +3095,27 @@ List the angles in 1-2 sentences each. Be concise.`;
             startIdx = i;
           }
 
-          // Clamp the budget result forward to the protect line (unconditional — no
-          // usage<80 gate, so a referenced turn never drops at any usage level). Must run
-          // after the scan and before hysteresis.
-          startIdx = Math.min(startIdx, protectLine);
+          // Guard (c)+(d): extend to protect line only under low pressure, and only within a
+          // token ceiling. Replaces the old unconditional Math.min(startIdx, protectLine).
+          const allowProtect = usagePct < PROTECT_MAX_USAGE_PCT;   // 0/unknown < 70 → allow; guards below cap it
+          if (allowProtect && protectLine < startIdx) {
+            const protectCeiling = Math.floor(tailBudgetTokens * PROTECT_TOTAL_MULT);
+            const target = Math.max(protectFloor, protectLine);    // double safety: never cross span/floor
+            for (let i = startIdx - 1; i >= target; i--) {
+              const msgTokens = msgTokensMemo(messages[i], partBillableText, countClaudeTokens);
+              if (tailTokens + msgTokens > protectCeiling) break;  // token ceiling: stop if protect region overflows
+              tailTokens += msgTokens;
+              startIdx = i;
+            }
+          }
 
+          // Floor hard bottom — whatever happened above, startIdx never escapes below floor.
+          startIdx = Math.max(floor, startIdx);
+
+          // Sticky start: reuse the previous start only if it sits within [floor, startIdx+5]
+          // (no longer re-introduces the protectLine drag).
           if (lastTailStartIdx >= floor && lastTailStartIdx <= startIdx + 5 && lastTailStartIdx < messages.length) {
-            startIdx = Math.min(lastTailStartIdx, protectLine);
+            startIdx = Math.max(floor, lastTailStartIdx);
           }
           lastTailStartIdx = startIdx;
 
@@ -3511,7 +3570,10 @@ List the angles in 1-2 sentences each. Be concise.`;
         const afterPct = realUsage.percentage > 0
           ? Math.round(realUsage.percentage * (rendered.length / Math.max(messages.length, 1)))
           : Math.round((rendered.length * 500 / contextLimit) * 100);
-        writeFileSync("/tmp/neural-compartment-status.json", JSON.stringify({
+        const statusPath = openCodeSessionId
+          ? `/tmp/neural-compartment-status-${openCodeSessionId}.json`
+          : "/tmp/neural-compartment-status.json";
+        writeFileSync(statusPath, JSON.stringify({
           ts: Date.now(),
           beforePct: Math.round(usagePct || (messages.length * 500 / contextLimit) * 100),
           afterPct,
