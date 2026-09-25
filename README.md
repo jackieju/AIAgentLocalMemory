@@ -26,7 +26,7 @@ The next-generation memory architecture for **local-first, private, explainable,
 
 - **Unlimited context management** — long history is transparently compressed into `<compartment>` summaries by a background historian while the recent tail stays full-fidelity, so conversations don't hit a token wall.
 - **Neural memory** — an associative graph (nodes + weighted synapses, Hebbian learning, spreading activation, working memory) recalls by meaning and association instead of keyword match.
-- **Cross-project shared memory** — one global memory graph is reused across every project and every session on the machine.
+- **Cross-session shared memory** — one global memory graph is reused across every project and every session on the machine.
 - **Cross-machine memory sync** — the memory graph replicates between machines through a Git-backed append-only operation log (conflict-free, `neural_sync` push / pull / status).
 - **Cross-device session sync** — the full raw OpenCode session (messages, tool calls, reasoning) can be replayed on a second machine via `neural_session_import`, so you switch computers and keep writing where you left off.
 - **Public and publishable Memory** - You can publish your memory anywhere (like github) or get others' public memory and merge with your own agenet memory, also others can get your agent memory and merge with his.
