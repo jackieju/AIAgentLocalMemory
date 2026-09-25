@@ -215,6 +215,88 @@ For large teams working on complex projects, the plugin creates a **collective i
 | `@ai-agent-local-memory/adapter-opencode` | OpenCode plugin adapter (full context management) |
 | `@ai-agent-local-memory/adapter-openclaw` | OpenClaw plugin adapter (ContextEngine + memory slot) |
 
+## Ways to Use This Project
+
+There are four ways to consume this project, from turnkey plugin to raw library. Pick the one that matches your host.
+
+### 1. OpenCode plugin (turnkey, most features)
+
+The richest integration. Full magic-context-style automatic context compression (historian + compartments), the growth layer (dreamer / observer-student-primary local LLM), the TUI sidebar, all `neural_*` tools, cross-machine sync, and session transcripts — all wired to OpenCode's plugin hooks.
+
+- Install: see [OpenCode Plugin → Install](#opencode-plugin).
+- Best for: anyone running OpenCode who wants everything with zero glue code.
+
+### 2. OpenClaw plugin
+
+The same neural memory core wired to OpenClaw's ContextEngine + memory slot. Shares the exact same memory graph as the OpenCode plugin by default (see [Sharing Memory Between Hosts](#sharing-memory-between-hosts)).
+
+- Install: see [OpenClaw Plugin → Install](#openclaw-plugin).
+- Best for: OpenClaw users who want the memory core inside their existing setup.
+
+### 3. `nvp-server` — JSON-RPC subprocess (any agent, any language)
+
+A standalone compiled binary (`packages/server/dist/nvp-server`) that speaks **JSON-RPC 2.0 over stdin/stdout** (one JSON object per line, `\n`-framed). It depends only on `core` + `storage-sqlite` — **zero OpenCode/OpenClaw dependency**. Any agent that can spawn a subprocess and read/write pipes can use it (this is how the AI Voice Agent integrates it from Swift).
+
+Build it:
+```bash
+cd packages/server
+bun run build          # produces dist/nvp-server
+```
+
+Every request carries `dbPath` + `projectId` in `params` (the server keeps one engine instance per `dbPath::projectId`). Supported methods:
+
+| Method | Purpose |
+|---|---|
+| `ping` | Health check → `{ ok, pid }` |
+| `ingest` | Feed one conversation turn: `params.session = { id, messages: [{role, content, timestamp}] }` (fire-and-forget) |
+| `recall` | Associative recall: `params = { query, maxResults?, maxHops?, threshold?, readOnly? }` |
+| `remember` | Store a node: `params = { content, type?, importance?, metadata? }` |
+| `renderContext` | Return compressed history (fidelity-tiered): `params = { sessionId, contextWindowTokens?, budgetRatio?, recentFullTextTurns?, seeds? }` |
+| `getStats` | Engine + working-memory stats |
+| `shutdown` | Graceful stop |
+
+Minimal example (feed a turn, then get compressed history back):
+```jsonc
+// → stdin
+{"jsonrpc":"2.0","id":1,"method":"ingest","params":{"dbPath":"/path/graph.db","projectId":"default","session":{"id":"sess-1","messages":[{"role":"user","content":"hi","timestamp":1700000000000}]}}}
+{"jsonrpc":"2.0","id":2,"method":"renderContext","params":{"dbPath":"/path/graph.db","projectId":"default","sessionId":"sess-1","contextWindowTokens":200000}}
+// ← stdout
+{"jsonrpc":"2.0","id":2,"result":{"messages":[{"role":"...","content":"..."}]}}
+```
+
+- Best for: a custom agent (voice, CLI, web, another editor) in **any** language that wants memory + context rendering without writing an adapter.
+- Note: the `nvp-server` path currently uses the fidelity-tiered `ContextRenderer`. The magic-context-style compartment compression lives in the OpenCode adapter today (see the two entry points below).
+
+### 4. Use the source library directly (`core` + `storage-sqlite`)
+
+Import the engine straight into your own TypeScript/JavaScript process — no subprocess, no RPC. This is what every adapter and `nvp-server` do under the hood.
+
+```ts
+import { NeuralContextEngine } from "@ai-agent-local-memory/core";
+import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+
+const storage = new SqliteStorageProvider({ storagePath: "/path/graph.db" });
+const engine = new NeuralContextEngine();
+await engine.init({ storage, projectId: "default", workingMemorySize: 1000, maxEdgesPerNode: 8 });
+
+await engine.remember("The API base URL is localhost:6655", "fact");
+const hits = await engine.recall("what is the api url", { maxResults: 5 });
+```
+
+Other building blocks exported from `core` (compose your own pipeline): `NeuralGraph`, `WorkingMemory`, `Historian`, `ContextRenderer`, `Compactor`, `Deduplicator`, `CrossSessionLinker`, `LightweightLinker`, `LLMExtractor`, `EmbeddingLinker`, `HierarchicalGraph`, `OperationLog`, `LoggedStorageProvider`, `EdgeWeightPredictor`, plus the LLM/embedding providers under `./providers`.
+
+- Storage runs on both Bun (`bun:sqlite`) and Node.js (`node:sqlite`) — see [Cross-Runtime Compatibility](#cross-runtime-compatibility).
+- Best for: embedding the memory engine inside your own service, or building a new host adapter.
+
+### At a glance
+
+| Method | Runtime coupling | Context compression | Growth layer | Effort |
+|---|---|---|---|---|
+| OpenCode plugin | OpenCode only | compartment (magic-context style) | ✅ full | none |
+| OpenClaw plugin | OpenClaw only | ContextEngine | partial | none |
+| `nvp-server` (JSON-RPC) | **any** (subprocess) | fidelity-tiered (`renderContext`) | via `remember`/`recall` | spawn + pipe |
+| Source library | **any** (in-process) | whatever you compose | whatever you compose | write your own glue |
+
 ## Data Model
 
 **Nodes (Neurons):** Memory units with types:
