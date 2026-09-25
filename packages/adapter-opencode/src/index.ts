@@ -56,6 +56,50 @@ function countClaudeTokens(text: string): number {
   catch { return Math.ceil((text.length / 4) * newTokenizerMultiplier); }
 }
 
+// Tool-value tiers (mirrors magic-context emergency-drop). Lower tier = higher value =
+// kept longer / dropped last. T1 = read-only probes (low context value once acted on),
+// T2 = mutations/searches (medium), T3 = everything else / unknown (dropped first).
+const TOOL_T1 = new Set(["read", "todowrite", "task", "aft_outline", "aft_zoom", "list", "glob"]);
+const TOOL_T2 = new Set(["edit", "write", "apply_patch", "grep", "bash", "aft_search", "webfetch"]);
+function resolveToolTier(toolName: string | undefined | null): 1 | 2 | 3 {
+  if (!toolName) return 3;
+  let name = toolName.toLowerCase();
+  if (name.startsWith("mcp_")) name = name.slice(4);
+  if (TOOL_T1.has(name)) return 1;
+  if (TOOL_T2.has(name)) return 2;
+  return 3;
+}
+
+// Retrievable stub: when a tool output is truncated/dropped, leave a breadcrumb telling
+// the LLM exactly where to fetch the verbatim original (the transcript MD mirrors every
+// tool block byte-for-byte). Includes tool name + a short arg summary so the model can
+// grep the MD, and — as a last resort if the MD is gone — knows what to re-run.
+function toolArgSummary(input: any): string {
+  if (input === undefined || input === null) return "";
+  try {
+    if (typeof input === "string") return input.slice(0, 160);
+    const s = JSON.stringify(input);
+    return s.length > 160 ? s.slice(0, 160) + "…" : s;
+  } catch { return ""; }
+}
+function buildToolStub(
+  toolName: string | undefined | null,
+  input: any,
+  sid: string,
+  keptChars: number,
+  origChars: number,
+): string {
+  const name = toolName ?? "unknown";
+  const args = toolArgSummary(input);
+  const argLine = args ? ` args=${args}` : "";
+  // sid may be a real ses_xxx (transcript filename) — point the model there.
+  return (
+    `\n\n…[tool output compacted — kept first ${keptChars} of ${origChars} chars]\n` +
+    `[retrieve verbatim: grep the tool block name="${name}"${argLine} in ` +
+    `~/.local/share/ai-agent-local-memory/transcripts/${sid}.md; if absent, re-run ${name} with the same args]`
+  );
+}
+
 // time.created is already ms; blindly *1000 double-scaled it and rendered a 30min gap as "+319d". Threshold 1e12 = year 2001, separates s from ms.
 function toEpochMs(created: number | undefined | null): number {
   if (!created || created <= 0) return 0;
@@ -2977,33 +3021,24 @@ List the angles in 1-2 sentences each. Be concise.`;
         // reintroduces the "Input too long" under-budgeting bug.
         const MICROCOMPACT_TRIGGER_CHARS = 50000;
         const MICROCOMPACT_STUB_CHARS = 2000;
-        const MICROCOMPACT_KEEP_RECENT = 3;
         {
           // Only scan the most-recent HARD_TAIL_CAP messages: older ones can never enter the
           // tail (the budget scan floors there too), so stubbing them is wasted O(N·parts) work.
           const microScanFrom = Math.max(0, messages.length - 500);
-          const largeToolMsgIdx: number[] = [];
           for (let i = microScanFrom; i < messages.length; i++) {
-            for (const part of (messages[i].parts ?? [])) {
-              const st = (part as any).state;
-              const out = st && typeof st.output === "string" ? st.output : (typeof (part as any).content === "string" ? (part as any).content : "");
-              if (out && out.length > MICROCOMPACT_TRIGGER_CHARS) { largeToolMsgIdx.push(i); break; }
-            }
-          }
-          const microKeepFrom = largeToolMsgIdx.length > MICROCOMPACT_KEEP_RECENT
-            ? largeToolMsgIdx[largeToolMsgIdx.length - MICROCOMPACT_KEEP_RECENT]
-            : Infinity;
-          for (const i of largeToolMsgIdx) {
-            if (i >= microKeepFrom) continue;
             let mutated = false;
             for (const part of (messages[i].parts ?? [])) {
               const st = (part as any).state;
+              const tname = (part as any).tool;
+              const tinput = st?.input;
               if (st && typeof st.output === "string" && st.output.length > MICROCOMPACT_TRIGGER_CHARS) {
-                st.output = st.output.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+                const orig = st.output.length;
+                st.output = st.output.slice(0, MICROCOMPACT_STUB_CHARS) + buildToolStub(tname, tinput, openCodeSessionId, MICROCOMPACT_STUB_CHARS, orig);
                 mutated = true;
               }
               if (typeof (part as any).content === "string" && (part as any).content.length > MICROCOMPACT_TRIGGER_CHARS) {
-                (part as any).content = (part as any).content.slice(0, MICROCOMPACT_STUB_CHARS) + "\n…[large tool result compacted]";
+                const orig = (part as any).content.length;
+                (part as any).content = (part as any).content.slice(0, MICROCOMPACT_STUB_CHARS) + buildToolStub(tname, tinput, openCodeSessionId, MICROCOMPACT_STUB_CHARS, orig);
                 mutated = true;
               }
             }
@@ -3094,6 +3129,25 @@ List the angles in 1-2 sentences each. Be concise.`;
             tailTokens += msgTokens;
             startIdx = i;
           }
+          // N=1 guarantee (safe-newest): the budget loop leaves startIdx at its initial
+          // value `messages.length` when the newest single message already exceeds
+          // tailBudgetTokens (first iteration breaks). That drops the user's CURRENT
+          // input entirely (tail=slice(length)=[] → slice(-1) fallback fires late/fragile).
+          // Force-include exactly the newest message. This is NOT a #277-style pull-back:
+          // startIdx only advances from `length` to `length-1` (fewer messages, never
+          // toward index 0), so it can never re-introduce thousands of raw msgs.
+          if (startIdx === messages.length && messages.length > 0) {
+            startIdx = messages.length - 1;
+            const forcedTokens = msgTokensMemo(messages[startIdx], partBillableText, countClaudeTokens);
+            tailTokens += forcedTokens;
+            if (forcedTokens > tailBudgetTokens) {
+              try {
+                writeFileSync(`/tmp/neural-newest-oversized-${openCodeSessionId}.log`,
+                  `${new Date().toISOString()} newest msg ${forcedTokens}tok > budget ${tailBudgetTokens}tok — force-included (single msg exceeds budget; upstream chunking territory)\n`,
+                  { flag: "a" as any });
+              } catch {}
+            }
+          }
 
           // Guard (c)+(d): extend to protect line only under low pressure, and only within a
           // token ceiling. Replaces the old unconditional Math.min(startIdx, protectLine).
@@ -3161,6 +3215,7 @@ List the angles in 1-2 sentences each. Be concise.`;
         const STRUCTURAL_NOISE_TYPES = new Set(["meta", "step-start", "step-finish"]);
 
         for (let i = 0; i < tail.length; i++) {
+          if (i === tail.length - 1) continue;
           const msg = tail[i];
           for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
             const part = msg.parts[pi];
@@ -3192,34 +3247,86 @@ List the angles in 1-2 sentences each. Be concise.`;
         // and mid-turn we don't recompress — so one big tool result mid-conversation
         // pushed the prompt past the model limit ("replied a bit, then Input too long").
         // Mirror magic-context's sentinel approach: overwrite state.output/content with
-        // a bounded stub in the non-protected region.
-        const TOOL_OUTPUT_MAX_CHARS = 4000;
+        // a bounded stub. Cap size is tier-driven: T3/unknown cut hardest, T2 medium, T1
+        // (read-only probes) most generous — cheap-to-refetch output loses least context.
+        const TOOL_CAP_BY_TIER: Record<1 | 2 | 3, number> = { 1: 4000, 2: 2000, 3: 800 };
         const toolTruncFloor = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
         for (let i = 0; i < toolTruncFloor; i++) {
           for (const part of (tail[i].parts ?? [])) {
             const st = (part as any).state;
-            if (st && typeof st.output === "string" && st.output.length > TOOL_OUTPUT_MAX_CHARS) {
-              st.output = st.output.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n…[tool output truncated for context]";
+            const tname = (part as any).tool;
+            const cap = TOOL_CAP_BY_TIER[resolveToolTier(tname)];
+            if (st && typeof st.output === "string" && st.output.length > cap) {
+              const orig = st.output.length;
+              st.output = st.output.slice(0, cap) + buildToolStub(tname, st.input, openCodeSessionId, cap, orig);
             }
-            if (typeof (part as any).content === "string" && (part as any).content.length > TOOL_OUTPUT_MAX_CHARS) {
-              (part as any).content = (part as any).content.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n…[tool output truncated for context]";
+            if (typeof (part as any).content === "string" && (part as any).content.length > cap) {
+              const orig = (part as any).content.length;
+              (part as any).content = (part as any).content.slice(0, cap) + buildToolStub(tname, st?.input, openCodeSessionId, cap, orig);
             }
           }
         }
 
         // Protected tail keeps text verbatim, but a single huge tool output could still
         // blow the whole prompt past the model limit. Cap tool output here (wider than the
-        // non-protected 4000 cap) — text parts are never touched, only tool results.
+        // non-protected caps) — text parts are never touched, only tool results.
         const PROTECTED_TOOL_OUTPUT_MAX_CHARS = 16000;
         const protectTailStartInTail = Math.max(0, protectLine - tailActualStart);
         for (let i = protectTailStartInTail; i < tail.length; i++) {
           for (const part of (tail[i].parts ?? [])) {
             const st = (part as any).state;
+            const tname = (part as any).tool;
             if (st && typeof st.output === "string" && st.output.length > PROTECTED_TOOL_OUTPUT_MAX_CHARS) {
-              st.output = st.output.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + "\n…[protected tail tool output capped]";
+              const orig = st.output.length;
+              st.output = st.output.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + buildToolStub(tname, st.input, openCodeSessionId, PROTECTED_TOOL_OUTPUT_MAX_CHARS, orig);
             }
             if (typeof (part as any).content === "string" && (part as any).content.length > PROTECTED_TOOL_OUTPUT_MAX_CHARS) {
-              (part as any).content = (part as any).content.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + "\n…[protected tail tool output capped]";
+              const orig = (part as any).content.length;
+              (part as any).content = (part as any).content.slice(0, PROTECTED_TOOL_OUTPUT_MAX_CHARS) + buildToolStub(tname, st?.input, openCodeSessionId, PROTECTED_TOOL_OUTPUT_MAX_CHARS, orig);
+            }
+          }
+        }
+
+        // Emergency drop (mirrors magic-context): only under real pressure, reclaim the
+        // lowest-value tool outputs entirely (sentinel + retrievable stub). Tier order
+        // T3→T2→T1 drops cheap/unknown tools first; each tier keeps its most-recent
+        // TIER_RECENCY_RESERVE fraction verbatim. Only touches the non-protected region.
+        const EMERGENCY_DROP_PCT = 85;
+        const TIER_RECENCY_RESERVE = 0.2;
+        if (usagePct >= EMERGENCY_DROP_PCT) {
+          const emTruncFloor = Math.max(0, tail.length - PROTECTED_TAGS_COUNT);
+          const byTier: Record<1 | 2 | 3, number[]> = { 1: [], 2: [], 3: [] };
+          for (let i = 0; i < emTruncFloor; i++) {
+            let hasTool = false;
+            let tname = "";
+            for (const part of (tail[i].parts ?? [])) {
+              if ((part as any).type === "tool" || (part as any).state?.output !== undefined) {
+                hasTool = true;
+                tname = (part as any).tool ?? tname;
+              }
+            }
+            if (hasTool) byTier[resolveToolTier(tname)].push(i);
+          }
+          const emDropSet = new Set<number>();
+          for (const tier of [3, 2, 1] as const) {
+            const idxs = byTier[tier];
+            if (idxs.length === 0) continue;
+            const reserveCount = Math.ceil(TIER_RECENCY_RESERVE * idxs.length);
+            const keepFrom = idxs.length - reserveCount;
+            for (let k = 0; k < keepFrom; k++) emDropSet.add(idxs[k]);
+          }
+          for (const i of emDropSet) {
+            for (const part of (tail[i].parts ?? [])) {
+              const st = (part as any).state;
+              const tname = (part as any).tool;
+              if (st && typeof st.output === "string" && st.output.length > 0) {
+                const orig = st.output.length;
+                st.output = buildToolStub(tname, st.input, openCodeSessionId, 0, orig);
+              }
+              if (typeof (part as any).content === "string" && (part as any).content.length > 0) {
+                const orig = (part as any).content.length;
+                (part as any).content = buildToolStub(tname, st?.input, openCodeSessionId, 0, orig);
+              }
             }
           }
         }
@@ -3396,18 +3503,23 @@ List the angles in 1-2 sentences each. Be concise.`;
             }
 
             // Pass B: drop any tool_result whose tool_use_id is not in the live set.
-            // Pair by id, never by position.
-            for (const m of rendered) {
+            // Pair by id, never by position. The newest rendered message is exempt so the
+            // user's current turn is never gutted; Pass D below normalizes any residual
+            // trailing tool_result into a protocol-legal boundary.
+            const lastRenderedIdx = rendered.length - 1;
+            for (let ri = 0; ri < rendered.length; ri++) {
+              const m = rendered[ri];
               if (m.info?.role !== "user") continue;
+              if (ri === lastRenderedIdx) continue;
               m.parts = ((m.parts ?? []) as any[]).filter(
                 (p) => p?.type !== "tool_result" || (typeof p.tool_use_id === "string" && liveToolUseIds.has(p.tool_use_id))
               );
             }
 
-            // Pass C: remove user messages emptied by Pass B. Keep non-user messages
-            // and any user message that still has parts. If everything collapsed, the
-            // Pass D fixup below will re-inject a sentinel.
+            // Pass C: remove user messages emptied by Pass B. The newest message is never
+            // spliced (N=1 guarantee). If everything else collapsed, Pass D re-injects a sentinel.
             for (let i = rendered.length - 1; i >= 0; i--) {
+              if (i === rendered.length - 1) continue;
               const m = rendered[i];
               if (m.info?.role === "user" && (m.parts?.length ?? 0) === 0) rendered.splice(i, 1);
             }
