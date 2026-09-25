@@ -1,305 +1,313 @@
-# Context 压缩流程详解（Context Compression Pipeline）
+# Context Compression Pipeline
 
-> 本文档描述 `ai-agent-local-memory` 插件在 OpenCode 中管理上下文的**完整流程**：
-> 从用户按下回车输入一条消息开始，到最终发给大模型的 payload 被组装出来为止，
-> 每一个阶段的动作、触发条件与设计意图。
+> This document describes the **complete flow** by which the `ai-agent-local-memory` plugin
+> manages context inside OpenCode: from the moment the user presses Enter to send a message,
+> all the way to the assembled payload sent to the LLM — every stage's action, trigger, and design intent.
 >
-> 核心文件：`packages/adapter-opencode/src/index.ts`
-> 关键 hook：`experimental.chat.messages.transform`
+> Core file: `packages/adapter-opencode/src/index.ts`
+> Key hook: `experimental.chat.messages.transform`
+>
+> 🇨🇳 中文版：[CONTEXT-COMPRESSION-PIPELINE_CN.md](./CONTEXT-COMPRESSION-PIPELINE_CN.md)
 
 ---
 
-## 0. 总览：两条独立的路径
+## 0. Overview: two independent paths
 
-插件在一次用户交互中，实际上跑两条**互相独立**的路径：
+In a single user interaction the plugin actually runs two **independent** paths:
 
-| 路径 | 何时触发 | 做什么 | 是否阻塞回显 |
+| Path | When it fires | What it does | Blocks echo? |
 |---|---|---|---|
-| **回显路径**（hot path） | 用户按回车的瞬间 | 落盘保命 + 压缩组装发给 LLM 的 payload | **是**，必须极快 |
-| **记忆路径**（idle path） | session 空闲时 | 写记忆图、historian 压缩、linking、dreamer | 否，全异步 |
+| **Echo path** (hot path) | The instant the user presses Enter | Crash-proof persistence + compresses & assembles the LLM payload | **Yes**, must be extremely fast |
+| **Memory path** (idle path) | When the session goes idle | Writes the memory graph, historian compression, linking, dreamer | No, fully async |
 
-**红线**：回显路径（`chat.message` + `messages.transform`）绝不做任何耗时 IO（DB 全量扫描、网络请求）。
-所有耗时工作都推到 `session.idle` 事件后执行。这是从多次「切到插件后卡死数分钟」事故中定死的铁律。
+**Red line**: the echo path (`chat.message` + `messages.transform`) must never do any slow IO (full DB scans, network requests).
+All slow work is pushed to after the `session.idle` event. This is an iron rule cemented by repeated "hang for minutes after switching to the plugin" incidents.
 
 ---
 
-## 1. 用户按回车 → `chat.message` hook（最早触点）
+## 1. User presses Enter → `chat.message` hook (earliest touchpoint)
 
 ```
-用户输入 "hello" + 回车
+User types "hello" + Enter
    │
    ▼
-chat.message hook 触发（早于回显、早于 transform）
+chat.message hook fires (before echo, before transform)
    │
-   ├─ 同步把 user 消息原文追加落盘到 pending-messages/<sid>.log
-   │  （保命：万一后续 transform 卡死，消息也不会丢）
+   ├─ Synchronously append the raw user message to pending-messages/<sid>.log
+   │  (crash-proof: even if a later transform hangs, the message is not lost)
    │
    └─ bump globalThis.__neuralMainBusyAt = Date.now()
-      （标记「主 session 正忙」，供可打断的后台 neural_read 让出）
+      (marks "main session is busy" so an interruptible background neural_read yields)
 ```
 
-**为什么先落盘**：早期版本 transform 一卡死，用户刚输入的消息连数据库都没进，永久丢失。
-`chat.message` 是 OpenCode 中能最早、且独立于 transform 拿到用户原文的点。
+**Why persist first**: in early versions, if transform hung, the message the user just typed
+never even reached the database and was lost forever.
+`chat.message` is the earliest point in OpenCode where you can grab the raw user text, independent of transform.
 
 ---
 
-## 2. `messages.transform` 入口 → 幂等守卫
+## 2. `messages.transform` entry → idempotency guard
 
 ```
 messages.transform(output)
    │
-   ├─ originalMessagesSnapshot = output.messages.slice()   ← 原始快照，出错时回滚
+   ├─ originalMessagesSnapshot = output.messages.slice()   ← original snapshot, roll back on error
    │
-   ├─ 幂等 guard：if (messages[RENDERED_SENTINEL]) return   ← 关键！
-   │     OpenCode 每轮会用同一个 messages 数组【调用两次】transform。
-   │     第一次已 splice/压缩后打上 RENDERED_SENTINEL 标记；
-   │     第二次直接返回，避免对已压缩结果再压一遍（否则会坍缩到只剩 1 条）。
+   ├─ idempotency guard: if (messages[RENDERED_SENTINEL]) return   ← critical!
+   │     OpenCode calls transform TWICE per turn with the SAME messages array.
+   │     The first pass splices/compresses and stamps RENDERED_SENTINEL;
+   │     the second pass returns immediately, avoiding re-compressing an already
+   │     compressed result (otherwise it collapses to just 1 message).
    │
-   └─ 若 magic-context 共存 → 直接透传（不接管压缩，避免两套 transform 打架）
+   └─ if magic-context coexists → pass through directly (don't take over compression,
+      avoiding two transforms fighting)
 ```
 
 ---
 
-## 3. 定位真实 session + 计算使用率
+## 3. Locate the real session + compute usage
 
 ```
-   ├─ 从 output.messages 里提取真实 OpenCode session ID（ses_xxx）
-   │     不能用目录 hash —— 那样查 compartments/usage 会串到别的 session。
+   ├─ Extract the real OpenCode session ID (ses_xxx) from output.messages
+   │     Must NOT use the directory hash — that would cross compartments/usage into another session.
    │
-   ├─ lastModelKey = 最后一条 assistant 消息用的模型
-   │     用于按模型解析上下文窗口（Opus=200K, GPT-5.x=400K, Kimi=256K...）
+   ├─ lastModelKey = the model used by the last assistant message
+   │     Used to resolve the context window by model (Opus=200K, GPT-5.x=400K, Kimi=256K...)
    │
    ├─ contextLimit = pluginConfig.contextWindowTokens ?? resolveContextWindow(lastModelKey)
    │
    └─ realUsage = getContextUsage(openCodeSessionId)
-      usagePct = 最近一条已结算 assistant 消息的真实 token 占用百分比
-      （查 opencode.db 的 cache.read + cache.write + input + output）
+      usagePct = real token-usage percentage from the most recent settled assistant message
+      (queries cache.read + cache.write + input + output from opencode.db)
 ```
 
 ---
 
-## 4. Scheduler：三态调度（execute / defer / skip）
+## 4. Scheduler: three-state scheduling (execute / defer / skip)
 
-决定这一轮**要不要触发 historian 生成新的压缩摘要（compartment）**：
+Decides whether this turn should **trigger the historian to produce a new compressed summary (compartment)**:
 
 ```
-   usagePct ≥ EXECUTE_THRESHOLD(65%)  且 非 mid-turn → execute（后台异步压缩）
-   usagePct ≥ 63% 或 mid-turn                        → defer （下轮再说）
-   否则                                               → skip  （不压缩）
+   usagePct ≥ EXECUTE_THRESHOLD(65%)  and not mid-turn → execute (async compress in background)
+   usagePct ≥ 63% or mid-turn                          → defer  (wait for next turn)
+   otherwise                                            → skip   (no compression)
 ```
 
-- **execute**：后台 IIFE 起 historian 子 session，把最旧的一批消息压成 compartment（见 §12）。**不阻塞** transform 返回。
-- historian 一次压缩的量 = `contextLimit × HISTORIAN_CHUNK_PCT(25%)`（对齐 magic-context）。
+- **execute**: a background IIFE spins up a historian sub-session to compress the oldest batch of messages into a compartment (see §12). **Does not block** transform's return.
+- The amount the historian compresses at once = `contextLimit × HISTORIAN_CHUNK_PCT(25%)` (aligned with magic-context).
 
 ---
 
-## 5. 读取已有 compartments → 算 tail 边界
+## 5. Read existing compartments → compute tail boundary
 
 ```
    compartments = compartmentStore.getForSession(openCodeSessionId)
-   │     compartment = 一段已被 historian 压成摘要的旧消息（存 SQLite）
+   │     compartment = a span of old messages already compressed into a summary by the historian (stored in SQLite)
    │
-   ├─ tailStart = 最后一个 compartment 的 endMessageId 在数组里的下标 + 1
-   │     （tail = 尚未被压缩、需要原样/近似保留的最近消息段）
+   ├─ tailStart = index of the last compartment's endMessageId in the array + 1
+   │     (tail = the recent message span not yet compressed, kept verbatim/near-verbatim)
    │
-   └─ maxCompartOrd = 最后一个 compartment 覆盖到的 ordinal
+   └─ maxCompartOrd = the ordinal the last compartment covers up to
 ```
 
-**tail = 从 tailStart 到末尾的消息**。压缩的核心就是「compartments（摘要）+ tail（近似原文）」拼起来发给 LLM。
+**tail = messages from tailStart to the end**. The core of compression is stitching together
+"compartments (summaries) + tail (near-verbatim)" and sending it to the LLM.
 
 ---
 
-## 6. L1 microCompact —— 巨型工具输出截断（在预算扫描之前）
+## 6. L1 microCompact — giant tool-output truncation (before the budget scan)
 
 ```
-   扫描最近 500 条消息：
-   for 每条消息的每个 part:
+   Scan the most recent 500 messages:
+   for each part of each message:
       if part.state.output.length > MICROCOMPACT_TRIGGER_CHARS(50000):
-         截断到前 2000 字符 + 可回溯 stub
+         truncate to the first 2000 chars + a retrievable stub
 ```
 
-**可回溯 stub 文案**（`buildToolStub`）：
+**Retrievable stub text** (`buildToolStub`):
 ```
 …[tool output compacted — kept first 2000 of 87000 chars]
 [retrieve verbatim: grep the tool block name="bash" args={"command":"…"} in
  ~/.local/share/ai-agent-local-memory/transcripts/<sid>.md; if absent, re-run bash with the same args]
 ```
 
-**为什么必须在预算扫描之前**：microCompact 直接改 `messages[]`（对象引用共享），
-让后面的 token 预算扫描（§8）测到的是「截断后」的尺寸。
-若顺序颠倒，巨型 payload 会以原尺寸顶爆预算 → 「Input too long」。
+**Why it must run before the budget scan**: microCompact mutates `messages[]` directly (shared object refs),
+so the later token budget scan (§8) measures the **post-truncation** size.
+If the order were reversed, a giant payload would blow the budget at its original size → "Input too long".
 
-**注意**：这里**不再豁免最近 N 条**（旧版有 `KEEP_RECENT=3`，已移除）——
-所有超过 5 万字符的工具输出一律截断，不管新旧。任务3的「最新一条不删」保的是消息整条不被删空，不是不截断内部的工具 payload。
-
----
-
-## 7. protectLine —— 保护线（四护栏加固）
-
-保护最近 ~2 个「有意义的用户 turn」不被压缩掉，解决「用户答 C 指向上一轮 A/B/C」的跨轮引用问题。
-
-**四护栏**（源于 build #277 爆炸事故，见 `docs/` 事故记录）：
-```
-(a) span cap    —— 回看不超过 MAX_PROTECT_SPAN(80) 条消息
-(b) floor       —— startIdx 永不低于 floor（HARD_TAIL_CAP=500 兜底）
-(c) token ceiling — 保护拉回不能把 tail 撑过 budget × 1.3
-(d) pressure gate — 仅当 usagePct < 70% 才启用保护，高压时放弃保护保命
-```
-
-护栏 (a)+(b) 折进扫描下界 `protectFloor = max(floor, length - 80)`，
-使 protectLine **物理上不可能**落到极小下标（那正是 #277 撑爆预算的根因）。
+**Note**: it **no longer exempts the most recent N** (the old `KEEP_RECENT=3` has been removed) —
+all tool outputs over 50k chars are truncated regardless of age. Task 3's "never delete the newest message"
+protects the message from being emptied entirely, not from having its internal tool payload truncated.
 
 ---
 
-## 8. L2 budget scan —— token 预算扫描（tail 定界）
+## 7. protectLine — the protect line (four-guardrail hardening)
+
+Protects the most recent ~2 "meaningful user turns" from being compressed away, solving the
+cross-turn reference problem ("user answers C, referring to A/B/C from the previous turn").
+
+**Four guardrails** (born from the build #277 blowup incident, see the incident notes in `docs/`):
+```
+(a) span cap    — look back no more than MAX_PROTECT_SPAN(80) messages
+(b) floor       — startIdx never drops below floor (HARD_TAIL_CAP=500 backstop)
+(c) token ceiling — the protect pull-back can't push the tail past budget × 1.3
+(d) pressure gate — enable protection only when usagePct < 70%; under high pressure abandon it to survive
+```
+
+Guardrails (a)+(b) are folded into the scan lower bound `protectFloor = max(floor, length - 80)`,
+making it **physically impossible** for protectLine to land at a tiny index (which was exactly the root cause of #277 blowing the budget).
+
+---
+
+## 8. L2 budget scan — token budget scan (tail delimitation)
 
 ```
    tailBudgetTokens = max(
-       contextLimit × 0.1,                                    ← 硬下限
+       contextLimit × 0.1,                                    ← hard lower bound
        (contextLimit × TARGET_USAGE_PCT(0.55) - systemToolsReserve) × breakerFactor
    )
 
-   从末尾往前累加：
+   Accumulate from the end backward:
    for i = length-1 downto floor:
-       tailTokens += msgTokensMemo(messages[i])   ← 用真实 tokenizer 精确计数（记忆化）
+       tailTokens += msgTokensMemo(messages[i])   ← precise count via the real tokenizer (memoized)
        if tailTokens > tailBudgetTokens: break
        startIdx = i
 ```
 
-- **systemToolsReserve** = `contextLimit × 0.18`：给 system prompt + 工具定义预留，
-  否则对话吃满 55% 后，system+tools 一叠加就溢出。
-- **breakerFactor**（熔断器）：historian 连续失败时，每次失败把 tail 预算减半（降到 1/4 floor），
-  保证即使压缩失败，请求也能降到限额以下，不会反复 413。
+- **systemToolsReserve** = `contextLimit × 0.18`: reserved for the system prompt + tool definitions,
+  otherwise once the conversation fills 55%, system+tools stacked on top overflow.
+- **breakerFactor** (circuit breaker): when the historian fails repeatedly, each failure halves the tail budget
+  (down to a 1/4 floor), so even if compression fails, the request drops below the limit and doesn't 413 over and over.
 
-**N=1 保证**（任务3）：若最新单条消息已超预算，budget loop 首轮 break 会把 startIdx 停在 `length`，
-掉进 slice(-1)。这里强制把最新一条纳入 tail —— 最新消息永不丢。
+**N=1 guarantee** (Task 3): if the newest single message already exceeds budget, the budget loop's first-pass break
+leaves startIdx at `length`, falling into slice(-1). Here we force the newest message into the tail — the newest message is never lost.
 
 ---
 
-## 9. protect 拉回
+## 9. Protect pull-back
 
 ```
    if (allowProtect && protectLine < startIdx):
-       startIdx = max(protectFloor, protectLine)   ← 把 tail 起点拉到保护线，但受 (b)(c) 双重钳制
+       startIdx = max(protectFloor, protectLine)   ← pull the tail start to the protect line, but doubly clamped by (b)(c)
 ```
 
-至此 **tail = messages.slice(startIdx)** 定界完成，后续都在 tail 上做减量，不再改变边界。
+At this point **tail = messages.slice(startIdx)** is delimited; everything afterward only reduces within the tail and never changes the boundary.
 
 ---
 
-## 10. tool 指纹去重
+## 10. Tool fingerprint deduplication
 
 ```
-   给每条 tool 消息算指纹 = toolName + input前300字符
-   同指纹出现多次 → 除最后一次外，其余（且落在保护区之外的）标记为 drop
-   （渲染时替换成空 —— 重复的工具调用只留最新一次）
-```
-
----
-
-## 11. 结构噪声清理 + caveman 压缩 + tier 截断
-
-按顺序对 tail 做逐级减量：
-
-```
-① 结构噪声清理：meta / step-start / step-finish part → 清空
-      （豁免最新一条 —— 任务3）
-
-② caveman 文本压缩（仅非保护区，按位置分级）：
-      前 20% → ultra（最狠）    20-40% → full    40-60% → lite
-      去填充词/冠词、缩写等自然语言压缩
-
-③ tier 截断（工具输出，按工具价值分档）：
-      T1 (read/todowrite/task/glob…只读探查) → 截到 4000（留多）
-      T2 (edit/write/grep/bash…)            → 截到 2000
-      T3 (未知/其他)                         → 截到 800（截最狠）
-      每处截断都带可回溯 stub（去 MD grep 工具名+参数）
-
-④ 保护区工具输出截断：> 16000 字符 → 截到 16000 + 可回溯 stub
-      （保护区文本原样不动，只截工具输出，防单条巨型工具结果撑爆）
+   Compute a fingerprint for each tool message = toolName + first 300 chars of input
+   Same fingerprint appears multiple times → all but the last (and only those outside the protected region) are marked drop
+   (rendered as empty — duplicate tool calls keep only the latest)
 ```
 
 ---
 
-## 12. Emergency drop —— 应急丢弃（贴 magic-context，仅高压触发）
+## 11. Structural-noise cleanup + caveman compression + tier truncation
+
+Reduce the tail in order:
+
+```
+① Structural-noise cleanup: meta / step-start / step-finish parts → cleared
+      (the newest message is exempt — Task 3)
+
+② Caveman text compression (non-protected region only, graded by position):
+      first 20% → ultra (hardest)    20-40% → full    40-60% → lite
+      natural-language compression: strip filler/articles, abbreviate, etc.
+
+③ Tier truncation (tool outputs, tiered by tool value):
+      T1 (read/todowrite/task/glob… read-only probes) → cut to 4000 (keep more)
+      T2 (edit/write/grep/bash…)                       → cut to 2000
+      T3 (unknown/other)                                → cut to 800 (cut hardest)
+      each truncation carries a retrievable stub (grep the MD by tool name + args)
+
+④ Protected-tail tool-output truncation: > 16000 chars → cut to 16000 + retrievable stub
+      (protected-region text is untouched, only tool outputs are cut, to prevent a single giant tool result from blowing up)
+```
+
+---
+
+## 12. Emergency drop — (aligned with magic-context, high-pressure only)
 
 ```
    if usagePct ≥ EMERGENCY_DROP_PCT(85%):
-      扫描非保护区的工具输出，按 tier 分组
-      每个 tier 保留最近 TIER_RECENCY_RESERVE(20%)（recency reserve）
-      其余按 T3 → T2 → T1 顺序【整条 sentinel 替换】（＝丢弃，非截断）
-      （同样留可回溯 stub，LLM 想看去 MD 取回）
+      Scan tool outputs in the non-protected region, group by tier
+      Each tier keeps its most recent TIER_RECENCY_RESERVE(20%) (recency reserve)
+      The rest are [replaced entirely by a sentinel] in T3 → T2 → T1 order (= dropped, not truncated)
+      (still leaves a retrievable stub so the LLM can fetch it from the MD)
 ```
 
-与 §11 的 tier 截断区别：
-- **§11 截断**：一直做，把大工具输出砍到几 K，保留头部。
-- **§12 丢弃**：只在真高压（≥85%）时做，把整个工具输出换成一句 stub。先丢低价值+旧的。
+Difference from §11's tier truncation:
+- **§11 truncation**: always runs, cuts large tool outputs down to a few K, keeps the head.
+- **§12 drop**: runs only under real pressure (≥85%), replaces the whole tool output with a one-line stub. Drops low-value + old ones first.
 
 ---
 
-## 13. 渲染循环 → 拼装最终消息数组
+## 13. Render loop → assemble the final message array
 
 ```
-   for 每条 tail 消息:
-      tagCounter++                              ← 给每条打 §N§ 标签
-      if 被 drop / 被去重 且未 pin → 渲染成空
-      注入时间间隔标记（+5m / +2h / +3d …）
-      注入 compartments（在 tail 之前，作为已压缩历史摘要）
-      注入 <project-memory> / <facts> / value/culture 性格层
-      pin 的消息豁免所有压缩
-```
-
----
-
-## 14. orphan tool_result 清扫 + 写回
-
-```
-   ① 收集 tail 里所有存活的 tool_use callID
-   ② 删掉配对 tool_use 已被裁掉的孤儿 tool_result（否则 Anthropic 400）
-   ③ 规范尾部边界（不能以 assistant 或纯 tool_result 结尾，否则 prefill 报错）
-   ④ messages.splice(0, messages.length, ...rendered)   ← 原地替换（proxy 对象要求 splice）
-   ⑤ 打上 RENDERED_SENTINEL 幂等标记
-```
-
-**至此，发给大模型的 payload 组装完成，transform 返回，回显出现。**
-
----
-
-## 15. 记忆路径（idle，全异步，不阻塞回显）
-
-session 空闲时消费 pendingIdleWork 队列：
-
-```
-session.idle 事件
-   │
-   ├─ historian 压缩：把最旧一批消息压成 compartment（子 session，用 historian agent）
-   │
-   ├─ lightweight linking：把 user/assistant 文本存入记忆图 + 建联想边（FTS+Jaccard）
-   │
-   ├─ transcript 归档：把整个 session 逐字镜像到 transcripts/<sid>.md（含工具输出原文）
-   │     ← 这就是 §6/§11/§12 stub 里让 LLM grep 的那个文件
-   │
-   ├─ Dreamer（每天最多一次，cooldown-lock）：从 episodes 抽取长期 fact / value / culture
-   │
-   └─ gap backfill：补录 transform 期间可能漏掉的消息到记忆图
+   for each tail message:
+      tagCounter++                              ← tag each with a §N§ label
+      if dropped / deduped and not pinned → render as empty
+      inject time-gap markers (+5m / +2h / +3d …)
+      inject compartments (before the tail, as compressed history summaries)
+      inject <project-memory> / <facts> / value/culture character layer
+      pinned messages are exempt from all compression
 ```
 
 ---
 
-## 附：关键阈值一览（写死常量，非配置项）
+## 14. Orphan tool_result sweep + write-back
 
-| 常量 | 值 | 含义 |
+```
+   ① Collect all live tool_use callIDs in the tail
+   ② Delete orphan tool_results whose paired tool_use was trimmed (otherwise Anthropic 400)
+   ③ Normalize the trailing boundary (can't end with assistant or a bare tool_result, else prefill error)
+   ④ messages.splice(0, messages.length, ...rendered)   ← in-place replace (the proxy object requires splice)
+   ⑤ Stamp the RENDERED_SENTINEL idempotency marker
+```
+
+**At this point, the payload for the LLM is assembled, transform returns, and the echo appears.**
+
+---
+
+## 15. Memory path (idle, fully async, does not block echo)
+
+When the session goes idle, it drains the pendingIdleWork queue:
+
+```
+session.idle event
+   │
+   ├─ historian compression: compress the oldest batch into a compartment (sub-session, using the historian agent)
+   │
+   ├─ lightweight linking: store user/assistant text into the memory graph + build associative edges (FTS+Jaccard)
+   │
+   ├─ transcript archiving: mirror the whole session verbatim to transcripts/<sid>.md (including raw tool output)
+   │     ← this is the file the stubs in §6/§11/§12 tell the LLM to grep
+   │
+   ├─ Dreamer (at most once per day, cooldown-lock): extract long-term fact / value / culture from episodes
+   │
+   └─ gap backfill: backfill messages the transform may have missed into the memory graph
+```
+
+---
+
+## Appendix: key thresholds (hard-coded constants, not config)
+
+| Constant | Value | Meaning |
 |---|---|---|
-| `EXECUTE_THRESHOLD` | 65% | scheduler 触发 historian 压缩的使用率 |
-| `TARGET_USAGE_PCT` | 0.55 | tail 目标占上下文窗口比例 |
-| `FORCE_COMPARTMENT_PCT` | 80% | 强制压缩阈值 |
-| `EMERGENCY_DROP_PCT` | 85% | 应急丢弃工具输出阈值 |
-| `ABORT_PCT` | 95% | 放弃阈值 |
-| `HISTORIAN_CHUNK_PCT` | 0.25 | historian 一次压缩量占窗口比例 |
-| `MICROCOMPACT_TRIGGER_CHARS` | 50000 | 巨型工具输出截断触发字符数 |
-| `TIER_RECENCY_RESERVE` | 0.2 | emergency drop 每 tier 保留最近比例 |
-| `MAX_PROTECT_SPAN` | 80 | 保护线最大回看消息数 |
-| `HARD_TAIL_CAP` | 500 | tail 硬上限（性能兜底） |
-| `SYSTEM_TOOLS_RESERVE_PCT` | 0.18 | 给 system+tools 预留比例 |
+| `EXECUTE_THRESHOLD` | 65% | Usage at which the scheduler triggers historian compression |
+| `TARGET_USAGE_PCT` | 0.55 | Target fraction of the context window the tail occupies |
+| `FORCE_COMPARTMENT_PCT` | 80% | Force-compression threshold |
+| `EMERGENCY_DROP_PCT` | 85% | Threshold for emergency tool-output drop |
+| `ABORT_PCT` | 95% | Give-up threshold |
+| `HISTORIAN_CHUNK_PCT` | 0.25 | Fraction of the window the historian compresses per run |
+| `MICROCOMPACT_TRIGGER_CHARS` | 50000 | Char count that triggers giant tool-output truncation |
+| `TIER_RECENCY_RESERVE` | 0.2 | Fraction each tier keeps recent during emergency drop |
+| `MAX_PROTECT_SPAN` | 80 | Max messages the protect line looks back |
+| `HARD_TAIL_CAP` | 500 | Tail hard cap (performance backstop) |
+| `SYSTEM_TOOLS_RESERVE_PCT` | 0.18 | Fraction reserved for system+tools |
 
-这些是内部调优常量，不通过配置文件暴露。可配置的选项见 [`CONFIGURATION-REFERENCE.md`](./CONFIGURATION-REFERENCE.md)。
+These are internal tuning constants, not exposed via the config file. For configurable options see [`CONFIGURATION-REFERENCE.md`](./CONFIGURATION-REFERENCE.md).

@@ -1,5 +1,7 @@
 # AIAgentLocalMemory
 
+> 🇨🇳 中文版 README：[README_CN.md](./README_CN.md)
+
 <!--Neural-network-inspired memory engine for AI agents. Uses Hebbian learning, spreading activation, and a working memory queue instead of traditional database queries.
 
 **Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time. Dont' waste any token any chat any dollar in your daily talk with LLM, which can make your local LLM smarter everyday.
@@ -962,8 +964,8 @@ opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
 
 Further reading in [`docs/`](./docs):
 
-- [Configuration Reference](./docs/CONFIGURATION-REFERENCE.md) — every configurable option, with defaults and a full example.
-- [Context Compression Pipeline](./docs/CONTEXT-COMPRESSION-PIPELINE.md) — the full flow from a user keypress to the assembled LLM payload.
+- [Configuration Reference](./docs/CONFIGURATION-REFERENCE.md) ([中文](./docs/CONFIGURATION-REFERENCE_CN.md)) — every configurable option, with defaults and a full example.
+- [Context Compression Pipeline](./docs/CONTEXT-COMPRESSION-PIPELINE.md) ([中文](./docs/CONTEXT-COMPRESSION-PIPELINE_CN.md)) — the full flow from a user keypress to the assembled LLM payload.
 - [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — how the agent grows commonsense and ethics as its safety layer.
 - [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — system architecture and the safety model.
 - [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — a walkthrough of the Observer / Student / Primary local-LLM modes.
