@@ -105,6 +105,80 @@ The next-generation memory architecture for **local-first, private, explainable,
 └──────────────────────────────────────────────────────────────────┘
 ```
 
+### Storage architecture — where every byte lives
+
+Top = the big LLM the agent talks to. Bottom = the optional local small model. In between sits the
+context layer (reads the host's DB for real token usage) and our own neural graph, plus every place
+we keep **verbatim original text**, the sync/backup fan-out, and the training-data generator.
+
+```
+                            ╔═══════════════════════════════════╗
+                            ║   BIG LLM  (Opus / GPT / Kimi …)  ║   ← the model the agent talks to
+                            ╚═════════════════┬═════════════════╝
+                                              │ prompt (compressed) ▲ / reply ▼
+   ┌──────────────────────────────────────────┼──────────────────────────────────────────┐
+   │  CONTEXT LAYER (messages.transform)        │        HOST DB (read-only, NOT ours)     │
+   │  historian + compartments + tail render ───┼──reads──►  opencode.db                   │
+   │  decides what to send the LLM              │        (message.tokens.* → real usage,   │
+   │                                            │         part table → historian input)    │
+   └──────────────────────────────────────────┼──────────────────────────────────────────┘
+                                              │ store / recall
+   ┌──────────────────────────────────────────▼──────────────────────────────────────────┐
+   │  NEURAL GRAPH   graph.db   (~/.local/share/ai-agent-local-memory/)                    │
+   │  ┌────────────────────────────┐   ┌────────────────────────────┐                     │
+   │  │ nodes                      │   │ synapses (edges)           │                     │
+   │  │  episode  ← verbatim*      │   │  src,dst,type,weight       │                     │
+   │  │  fact/concept/assertion    │   │  entity·lexical·semantic·… │                     │
+   │  │  value/culture/experience  │   └────────────────────────────┘                     │
+   │  │  (*episode content, ≤2000  │   ┌────────────────────────────┐                     │
+   │  │   chars, user/asst ONLY —  │   │ compartments               │                     │
+   │  │   safePutNode rejects      │   │  p1/p2/p3 summaries (NOT   │                     │
+   │  │   tool output)             │   │  verbatim) start/end ord    │                     │
+   │  └────────────────────────────┘   └────────────────────────────┘                     │
+   │  ┌────────────────────────────────────────────────────────┐                          │
+   │  │ nodes_fts  (FTS5, unicode61)  = Intl.Segmenter TOKENS,   │  ← NOT the raw text;      │
+   │  │   NOT verbatim. Joins back to nodes.content for原文.     │     original lives in     │
+   │  └────────────────────────────────────────────────────────┘     nodes.content ▲       │
+   └───────┬───────────────────────────────────────────────────────────────────┬──────────┘
+           │ every write also appended (embedding stripped)                     │ verbatim mirrors
+           ▼                                                                    ▼
+   ┌───────────────────────────────┐   ┌───────────────────────────────────────────────────┐
+   │  OPERATION LOG                │   │  VERBATIM ORIGINAL-TEXT STORES                     │
+   │  sync/operations.jsonl        │   │  transcripts/<sid>.md  ← FULL text + TOOL OUTPUT   │
+   │  append-only, JSONL           │   │       + reasoning (what every ✂ stub tells the     │
+   │  add/update/del × node/edge   │   │       LLM to grep)                                 │
+   └──────────────┬────────────────┘   │  episodes/<sid>.json   ← full SessionData          │
+                  │                     │  sync/opencode-sessions/<sid>.jsonl ← msg+parts    │
+                  │ git auto-push        └───────────────────────────────────────────────────┘
+                  ▼
+   ┌───────────────────────────────────────────────────────────────────────────────────────┐
+   │  EXTERNAL BACKUP / SYNC                                                                 │
+   │  GitHub  jackieju/myaimemorystore.git   ← ONLY operations.jsonl + *.session.json meta   │
+   │            (.gitignore excludes graph.db / *.db.gz / whole-session *.jsonl)             │
+   │  backups/<timestamp>/   ← local full copy      iCloud  opencode-backup/opencode.db.gz   │
+   │  neural_sync import <repoUrl>  ← one-way merge another person's shared memory (no push)  │
+   └───────────────────────────────────────────────────────────────────────────────────────┘
+
+   ┌───────────────────────────────────────────────────────────────────────────────────────┐
+   │  TRAINING-DATA GENERATOR (feeds the local small model)                                  │
+   │  training-pairs/pairs.jsonl (Q/A) · tool-calls.jsonl (tool decisions + optional CoT)    │
+   │       │  export-training-data.ts  (merge: experience nodes + pairs + tool-calls, dedup) │
+   │       ▼                                                                                 │
+   │  lora-pipeline/training-data/{train,valid}.jsonl ──train──► adapters/<ts>/*.safetensors │
+   └───────────────────────────────────────────────────────────┬───────────────────────────┘
+                                                                │ LoRA adapter
+                            ╔═══════════════════════════════════▼═════════════════╗
+                            ║   LOCAL SMALL LLM  (optional, ollama qwen3:14b …)   ║   ← we store NO
+                            ║   we store only the endpoint+model reference,        ║      model weights,
+                            ║   not the model weights themselves                   ║      only config
+                            ╚══════════════════════════════════════════════════════╝
+```
+
+**Three things the diagram is careful about (and why):**
+- **FTS holds tokens, not原文.** `nodes_fts` stores `Intl.Segmenter`-segmented tokens for CJK-aware search; the verbatim text lives in `nodes.content` (and the transcript MD). Searching joins FTS hits back to `nodes.content`.
+- **transcript MD ≠ episode node.** The transcript `.md` is a byte-for-byte mirror **including tool output + reasoning**; the graph's `episode` node stores only user/assistant text, truncated to 2000 chars — `safePutNode`'s allow-list explicitly **rejects tool output**. So the graph never bloats with tool dumps, but nothing is lost: the full dump is in the transcript, which every compaction stub points the LLM to.
+- **GitHub only gets the operation log.** The `.gitignore` excludes `graph.db`, `*.db.gz`, and whole-session `*.jsonl`, so the git remote stays tiny (append-only ops replay to rebuild the graph). The DB itself goes to local `backups/` and iCloud instead.
+
 ### Knowledge routing — where does what you learn end up?
 
 Every conversation you have through OpenCode with this plugin is split into two streams:
