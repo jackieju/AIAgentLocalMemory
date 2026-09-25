@@ -294,6 +294,179 @@ session.idle event
 
 ---
 
+## Worked example: one message through the whole pipeline
+
+This walks a **single user turn** through the pipeline end to end, showing the `messages[]` state
+after each stage. To keep it readable the numbers are scaled down (a 20-message session, a small
+budget); the *behaviour* matches the code exactly. Legend:
+
+```
+  [U] user text      [A] assistant text     [T] tool call + output
+  §N§ = render tag    ▓ = compartment (summary)    ░ = dropped/emptied
+  ✂ = truncated       ⭑ = protected (last ~2 user turns)
+```
+
+### Setup — what the host hands us
+
+The user just typed **"用 C 方案"** (answering an earlier A/B/C question). OpenCode calls
+`messages.transform` with the full live array. Say the session already has **1 compartment**
+covering the oldest 8 messages, so the DB looks like:
+
+```
+ opencode.db (host)          compartments table (ours)
+ ─────────────────           ──────────────────────────
+ msg #0..#19 (20 msgs)       ▓ cmp-1: startOrd=0 endOrd=7
+   each with tokens.*          endMessageId = id(msg#7)
+                               p1/p2/p3 summary of msgs #0–7
+```
+
+The incoming array (indices = ordinals here for simplicity):
+
+```
+ idx: 0   1   2   3   4   5   6   7 │ 8   9   10  11  12  13  14  15  16  17  18  19
+      U   A   T   A   U   A   T   A │ U   A   T   A   U   A   T   A   U   A   U   A(?)
+      └──────── covered by cmp-1 ───┘ └──────── not yet compressed ─────────────┘ ▲
+                                                                        msg#18 = "用 C 方案" (just typed)
+      (msg #2/#6/#10/#14 are big tool outputs; #10 is a 60KB bash dump)
+```
+
+### Stage 2 — idempotency guard
+
+First pass on this array → the `RENDERED_SENTINEL` Symbol is absent → **proceed**.
+(If OpenCode re-invokes transform on the *same* array object this turn, the Symbol is now set → instant no-op, no double-compression.)
+
+### Stage 6–8 — usage & scheduler
+
+```
+ getContextUsage(sid) → last finished assistant tokens = 138k / 200k  → usagePct = 69%
+ isMidTurn? last DB assistant $.finish = "stop" (not "tool-calls")     → false
+ scheduler: usagePct 69 ≥ 65 and not mid-turn                          → "execute"
+```
+
+### Stage 9–10 — compartments & tail boundary
+
+```
+ compartments = [cmp-1]         (endMessageId = id(msg#7))
+ tailStart = indexOf(id msg#7) + 1 = 8      ← located by message-id, NOT a stored index
+
+ ┌─ compartment region ─┐┌──────────── tail (verbatim-ish) ────────────┐
+ ▓▓▓▓▓▓▓▓ (cmp-1 = #0–7)  #8 #9 #10 #11 #12 #13 #14 #15 #16 #17 #18 #19
+```
+
+### Stage 12 — microCompact (L1): stub the 60KB tool output
+
+msg **#10**'s `state.output` is 60 000 chars > `MICROCOMPACT_TRIGGER_CHARS (50000)` → keep first
+2 000 chars + a retrievable stub. Nothing else changes yet.
+
+```
+ before: #10 [T bash] state.output = "<60000 chars>"
+ after : #10 [T bash] state.output = "<2000 chars>…[tool output compacted — kept first 2000 of 60000 chars]
+                                       [retrieve verbatim: grep the tool block name=\"bash\" args={…} in
+                                        ~/.local/share/ai-agent-local-memory/transcripts/<sid>.md]"
+```
+
+This mutates the shared object ref, so the next stage measures the **shrunken** size.
+
+### Stage 13 — protectLine: anchor the last ~2 user turns
+
+Scan backward for `hasMeaningfulUserText`, stop at the 2nd one:
+
+```
+ …#16[U] …#17[A] …#18[U="用 C 方案"] …#19[A]
+        2nd meaningful user ↑           1st meaningful user ↑ (=#18)
+ protectLine = 16       (guardrails: span≤80 ✓, ≥floor ✓, usagePct 69 < 70 ✓ so protection is ON)
+```
+
+`#16..#19` become the ⭑protected region — they will not be compressed away, so the model still
+sees the A/B/C question (#16/#17) that "用 C 方案" refers to.
+
+### Stage 14 — budget scan (L2): where does the tail start?
+
+`tailBudgetTokens = max(20k, (110k − 36k)×1.0) = 74k`. Accumulate from the end backward until it
+overflows; suppose it fits from **#12** onward:
+
+```
+ scan: #19+#18+#17+…+#12 = 71k ≤ 74k, add #11 → 79k > 74k → break
+ startIdx = 12
+ protect pull-back: protectLine(16) is NOT < startIdx(12) → no change
+ tail = messages.slice(12) = #12 … #19
+```
+
+State now:
+
+```
+ ▓ cmp-1 (#0–7)   [#8 #9 #10✂ #11]  ← dropped by budget scan (before startIdx)
+                   └── these fall out of the window; their gist is safe in cmp-1 only if compressed;
+                       #8–#11 are NOT in cmp-1, so the historian (Stage 17) will later compress them.
+ tail →            #12 #13 #14 #15 │ #16 #17 #18 #19
+                   └─ compressible ─┘ └── ⭑protected ──┘
+```
+
+### Stage 16 — reduce *within* the tail (boundary is now fixed)
+
+```
+ tail:  #12[U] #13[A] #14[T] #15[A] │ #16[U] #17[A] #18[U] #19[A]
+                                      └────── protected: untouched ──────┘
+
+ 16b structural noise:  step-start/step-finish parts in #12–#18 → emptied (last msg #19 exempt)
+ 16c caveman (oldest hardest, only the non-protected front ~part):
+        #12 text → "ultra"  #13 → "full"  #14 n/a(tool)  (protected #16–19 skipped)
+ 16d tool truncation:  #14[T grep] tier T2 → state.output capped at 2000 + stub
+ 16e protected tool cap: (none >16k here)
+```
+
+### Stage 12/emergency — only if usagePct ≥ 85%
+
+Here usagePct is 69% (< 85) → **emergency drop does not run**. (If it were ≥85%, T3→T2→T1 tool
+outputs outside the recent-20% would be replaced wholesale by one-line stubs.)
+
+### Stage 13/render — assemble the outgoing array
+
+```
+ OUTPUT sent to the LLM (top → bottom):
+
+   <compartment ▓>  p1/p2/p3 summary of msgs #0–7      ← from cmp-1
+   §12§ [U] "ultra-compressed #12"
+   §13§ [A] "full-compressed #13"
+   §14§ [T grep] "<2000-char output>✂ …[retrieve verbatim: …]"
+   §15§ [A] "…"
+   §16§ ⭑[U] "……方案 A / B / C ……"        ← verbatim (protected)
+   §17§ ⭑[A] "……你选哪个？……"              ← verbatim (protected)
+   §18§ ⭑[U] "用 C 方案"                     ← the newest user msg, never dropped
+   §19§ ⭑[A] …
+   + injected: <project-memory>, <facts>, value/culture character layer, time-gap markers
+```
+
+### Stage 14/sweep — orphans + write-back
+
+```
+ ① live tool_use callIDs in tail = {#14}
+ ② any tool_result whose tool_use was trimmed (e.g. #10's pair fell out) → deleted (else Anthropic 400)
+ ③ trailing boundary ok (ends on assistant #19; if it ended on a bare tool_result it'd be normalized)
+ ④ messages.splice(0, messages.length, ...rendered)   ← in-place replace
+ ⑤ stamp RENDERED_SENTINEL
+ → transform returns, echo of "用 C 方案" appears.
+```
+
+### Later, on idle (Stage 15) — async, does not block the echo
+
+```
+ session.idle:
+   ├─ historian: compress the now-old #8–#11 batch → new ▓ cmp-2 (endMessageId = id #11)
+   │     next turn, tailStart jumps to 12 automatically
+   ├─ transcript: mirror the WHOLE session verbatim (incl. the 60KB #10 output) → transcripts/<sid>.md
+   │     ← this is what every ✂ stub tells the model to grep
+   ├─ lightweight linking: store #18/#19 text as graph nodes + FTS/Jaccard edges
+   └─ dreamer (≤1×/day): mine facts/values from episodes
+```
+
+**Net effect this turn:** a 20-message array (with a 60KB blob) that would have blown the window was
+sent as `1 compartment summary + 8 tail messages` (4 of them verbatim-protected), staying under the
+74k tail budget — while the newest "用 C 方案" and the A/B/C it references were both preserved, and
+nothing was truly lost (the full text lives in the compartment summary, the graph, and the transcript MD).
+
+---
+
 ## Appendix: key thresholds (hard-coded constants, not config)
 
 | Constant | Value | Meaning |
