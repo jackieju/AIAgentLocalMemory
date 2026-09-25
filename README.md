@@ -5,7 +5,7 @@
 **Transform any AI agent into a growing, personal intelligence.** This plugin gives AI agents their own local brain — memory that persists, context that scales, and a local LLM that learns and improves through daily use. Like giving your AI a private mind that gets smarter over time. Dont' waste any token any chat any dollar in your daily talk with LLM, which can make your local LLM smarter everyday.
 -->
 
-**AI-Agent-Local-Memory** is the only open-source project that brings together, in one on-device stack:
+**AI-Agent-Local-Memory** is a project that brings together, in one on-device stack:
 
 - **Auditable, drift-resistant memory** — every fact traceable to its source
 - **Smart context scheduling** — the right memories at the right time
@@ -14,7 +14,7 @@
 - **Local teacher–student self-distillation** — the agent learns and improves on your machine
 - **Built-in commonsense & ethical alignment** — a safety foundation, not an afterthought
 
-Traditional memory stores drift, can't be audited, can't be trained on, can't be explained, ship with no safety layer, and can't evolve on their own. **AI-Agent-Local-Memory fixes the whole chain.**
+<!-- Traditional memory stores drift, can't be audited, can't be trained on, can't be explained, ship with no safety layer, and can't evolve on their own. **AI-Agent-Local-Memory fixes the whole chain.**-->
 
 The next-generation memory architecture for **local-first, private, explainable, self-evolving agents.**
 
