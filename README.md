@@ -958,6 +958,16 @@ Original design session (OpenCode):
 opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
 ```
 
+## Documentation
+
+Further reading in [`docs/`](./docs):
+
+- [Configuration Reference](./docs/CONFIGURATION-REFERENCE.md) — every configurable option, with defaults and a full example.
+- [Context Compression Pipeline](./docs/CONTEXT-COMPRESSION-PIPELINE.md) — the full flow from a user keypress to the assembled LLM payload.
+- [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — how the agent grows commonsense and ethics as its safety layer.
+- [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — system architecture and the safety model.
+- [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — a walkthrough of the Observer / Student / Primary local-LLM modes.
+
 ## License
 
 Copyright (C) 2026 Jackie Ju
