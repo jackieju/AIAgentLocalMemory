@@ -15,5 +15,8 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
-  "files": ["dist", "README.md"]
+  "files": ["dist", "README.md"],
+  "dependencies": {
+    "ai-tokenizer": "^1.0.6"
+  }
 }

@@ -5,6 +5,16 @@ import {
   NeuralGraph,
   WorkingMemory,
   ContextRenderer,
+  Historian,
+  runCompartmentTransform,
+  setActiveTokenizerModel,
+  resolveContextWindow,
+  countClaudeTokens,
+  resolveToolTier,
+  buildToolStub,
+  toEpochMs,
+  makeMsgTokensMemo,
+  type TransformDeps,
   type EngineConfig,
   type ContextRenderConfig,
   type RecallOptions,
@@ -15,7 +25,7 @@ import {
   type MemoryNode,
   type EpisodicData,
 } from "@ai-agent-local-memory/core";
-import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 
 interface RpcRequest {
   jsonrpc?: string;
@@ -236,6 +246,50 @@ const handlers: Record<
   async getStats(params) {
     const inst = await getInstance(params);
     return inst.engine.getStats();
+  },
+
+  async transform(params) {
+    const inst = await getInstance(params);
+    const dbPath = requireString(params, "dbPath");
+    const sessionId = requireString(params, "sessionId");
+    const messages = Array.isArray(params?.messages) ? params.messages : [];
+    const modelKey = typeof params?.modelKey === "string" ? params.modelKey : undefined;
+
+    const compartmentStore = new CompartmentStore(inst.storage.getDb());
+    const historian = new Historian({ llm: { complete: async () => "" } as any });
+
+    const msgTokenCache = new Map<string, { hash: string; tokens: number }>();
+    setActiveTokenizerModel(modelKey);
+
+    const state: Record<string, any> = { currentOpenCodeSessionId: sessionId };
+    const deps: TransformDeps = {
+      getContextUsage: () => ({ percentage: 0, inputTokens: 0 }),
+      hasNativeUsage: false,
+      storage: inst.storage,
+      rawStorage: inst.storage,
+      compartmentStore,
+      historian,
+      pendingIdleWork: [],
+      countClaudeTokens,
+      msgTokensMemo: makeMsgTokensMemo(msgTokenCache, 10000),
+      msgTokenCache,
+      setActiveTokenizerModel,
+      resolveContextWindow,
+      buildToolStub,
+      resolveToolTier,
+      toEpochMs,
+      pinnedTags: new Set<number>(),
+      droppedTags: new Set<number>(),
+      pluginConfig: {},
+      sessionId,
+      localLlmMode: undefined,
+      autoEscalateAfter: undefined,
+      state,
+    };
+
+    const output = { messages };
+    await runCompartmentTransform({ messages }, output, deps);
+    return { messages: output.messages, count: output.messages.length };
   },
 
   async shutdown(params) {

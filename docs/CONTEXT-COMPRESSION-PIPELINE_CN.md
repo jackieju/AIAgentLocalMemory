@@ -11,6 +11,44 @@
 
 ---
 
+## 摘要：摘要机制与历史保留策略是怎么做的
+
+最常被问到的两个问题，先在最前面回答清楚：
+
+### 摘要在哪些地方做？用什么模型？
+
+系统里所有"摘要"任务都用**同一个 LLM**（`historianLlm`）。它实际连的是哪个模型：
+
+1. 若在 `neural-context.json` 里配了 `llm` 字段（例如 `provider: ollama, model: qwen3:14b`）→ **走你的本地模型**（参考配置下是本地 Ollama 的 Qwen3:14B）。
+2. 否则回退到 `http://localhost:6655/openai/v1` 的 `claude-sonnet-4-6`，再 fallback 到 `gpt-4.1-mini`、`gpt-5-mini`。
+
+有 4 处调用它：**Historian 压缩**（把一段旧对话 + 工具输出折叠成一个 `<compartment>` 摘要块）、**Dreamer**（每天一次，从对话里抽取事实/价值观/文化特征存进记忆图）、**本地 LLM 判断**（observer/student 模式）、**neural_read**（从 URL/文本抽取 value/culture 候选）。
+
+**关键：Context 压缩的绝大部分工作不用任何模型。** microCompact（截断超大工具输出）、caveman 压缩（去填充词）、tail 预算裁剪、孤儿清除，全是纯字符串/预算计算，**零 LLM**。只有"把整段旧对话折叠成一句摘要"（compartment）这一步才调模型。
+
+### 历史是不是"全塞到放不下为止"？—— 不是。
+
+历史**不是**塞满 100% 直到爆掉，而是**主动压缩 + 预算裁剪**，分三层控制：
+
+1. **compartment 折叠（`tailStart`）**——最后一个 compartment 的 `endMessageId` 之前的历史，*早已被 Historian 摘要成折叠块*，不再逐条塞入，只塞那一句摘要。
+2. **tail 预算裁剪**——对 `tailStart` 之后的"尾部原文对话"，设一个 token 预算 `tailBudgetTokens`：基准 = `contextLimit × 0.55`（`TARGET_USAGE_PCT`），减去约 18% 给 system prompt + 工具 schema 预留，再乘熔断因子。循环**从最新消息往回累加，超预算就 break**，丢掉最旧的 tail 消息。
+3. **两道硬底**——`HARD_TAIL_CAP = 500` 条上限；**最新一条永远保留**（即便它自己就超预算也 force-include，它内部的超大工具输出改由 microCompact 截断）。
+
+所以准确的说法是：**旧历史摘要成折叠块；尾部只保留最近的、能塞进 55% 窗口预算的原文对话；超出的丢弃；最新一条无论如何保留。** 目标利用率是窗口的 **55%**，不是 100%。
+
+### compartment + tail 超预算时，砍谁 —— compartment 还是 tail？
+
+**砍的是 tail 里最旧的原文，最新的绝不砍。** 但机制要讲精确：
+
+- compartment 和 tail **不抢同一个预算**。`tailBudgetTokens` **只管 tail**（原文对话）。compartment 摘要是在这个预算之外注入的。
+- 预算裁剪**只作用在 tail 上**，从**最旧**的 tail 消息开始往后砍（`for i = length-1 → floor`，超预算 break）。最新一条先 force-include 保住。
+- compartment 覆盖范围**只增不减**（`tailStart` 是地板）。随对话变长，Historian 不断把新变旧的历史折叠进 compartment，把 `tailStart` 往后推。所以**不存在"砍 compartment"这个动作**——compartment 是已经压缩好的成果，只会累积；真正在超预算时被裁掉的是"还没被折叠的、较旧的 tail 原文"，而它们同时正被 Historian 折叠进 compartment。
+- 被丢掉的旧 tail 不是"删了就没了"：它们要么已经、要么很快被折叠进 compartment 摘要，要么进 `<earlier-topics>` 汇总（>20 条被跳过时，每条被跳过的 user 消息取前 80 字塞进一个清单）。
+
+> **已知边界情况**：compartment 摘要目前是无条件全部注入的（不受 `tailBudgetTokens` 限制）。实践中每个都很小（几百 token），几十个也远在限制内。若摘要累积过多，这可能成为压力点——是将来给 compartment 摘要也加预算上限的候选改进。
+
+---
+
 ## 0. 总览：两条独立的路径
 
 插件在一次用户交互中，实际上跑两条**互相独立**的路径：

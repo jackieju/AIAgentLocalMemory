@@ -11,6 +11,44 @@
 
 ---
 
+## Summary: how summarization and history retention actually work
+
+Two questions people ask most often, answered up front:
+
+### Where is "summarization" done, and by which model?
+
+Every summarization task in the system uses **one shared LLM** (`historianLlm`). Which model that resolves to:
+
+1. If you set the `llm` field in `neural-context.json` (e.g. `provider: ollama, model: qwen3:14b`) → **your local model** (Ollama Qwen3:14B in the reference setup).
+2. Otherwise it falls back to `http://localhost:6655/openai/v1` with `claude-sonnet-4-6`, then `gpt-4.1-mini`, then `gpt-5-mini`.
+
+Four places call it: **Historian compression** (folding an old stretch of conversation + tool outputs into one `<compartment>` summary block), **Dreamer** (once-daily fact/value/culture extraction into the memory graph), **local-LLM judging** (observer/student modes), and **neural_read** (curating value/culture candidates from a URL/text).
+
+**Crucially, most of context compression uses no model at all.** microCompact (truncating oversized tool outputs), caveman compression (stripping filler words), tail budgeting, and orphan sweeps are all pure string/budget math — **zero LLM**. Only the step that folds an old conversation stretch into a one-line summary (a compartment) calls the model.
+
+### Is history "stuffed until it no longer fits"? — No.
+
+History is **not** packed to 100% until it overflows. It is actively compressed and budget-trimmed in three layers:
+
+1. **Compartment folding (`tailStart`)** — history before the last compartment's `endMessageId` has *already been summarized* into fold blocks by the Historian. It is not re-fed message by message; only the one-line summary goes in.
+2. **Tail budget trimming** — for the raw conversation *after* `tailStart`, a token budget `tailBudgetTokens` is set: base = `contextLimit × 0.55` (`TARGET_USAGE_PCT`), minus ~18% reserved for system prompt + tool schemas, times a circuit-breaker factor. The loop **accumulates from the newest message backwards and breaks once the budget is exceeded**, dropping the oldest tail messages.
+3. **Two hard floors** — `HARD_TAIL_CAP = 500` messages max, and the **newest message is always kept** (force-included even if it alone exceeds the budget; its oversized tool outputs are truncated by microCompact instead).
+
+So the accurate description is: **old history is folded into summaries; the tail keeps the most recent raw conversation that fits inside the 55% window budget; the excess is dropped; the newest message is kept no matter what.** Target utilization is **55%** of the window, not 100%.
+
+### When compartment + tail exceed budget, what gets cut — compartment or tail?
+
+**The tail's oldest raw messages get cut. The newest is never cut.** But note the mechanism precisely:
+
+- Compartments and the tail do **not** compete for the same budget. `tailBudgetTokens` governs **only the tail** (raw conversation). Compartment summaries are injected outside this budget.
+- Budget trimming acts **only on the tail**, cutting from the **oldest** tail messages forward (`for i = length-1 → floor`, break on overflow). The newest message is force-included first.
+- Compartment coverage **only grows, never shrinks** (`tailStart` is a floor). As the conversation lengthens, the Historian keeps folding newly-old history into compartments, pushing `tailStart` forward. So there is no "cut a compartment" action — **compartments are finished compression output that only accumulates**; what actually gets trimmed under budget pressure is the *not-yet-folded, older tail raw text*, which is simultaneously being folded into compartments by the Historian.
+- Messages dropped from the tail are not simply lost: they are (or soon will be) folded into a compartment summary, or listed in an `<earlier-topics>` digest (when >20 messages are skipped, each skipped user message contributes its first 80 chars to a list).
+
+> **Known edge case**: compartment summaries are currently injected unconditionally (not bounded by `tailBudgetTokens`). In practice each is small (a few hundred tokens), so dozens of them stay well within limits. If summaries ever accumulate excessively this could become a pressure point — a candidate for a future per-compartment-summary budget cap.
+
+---
+
 ## 0. Overview: two independent paths
 
 In a single user interaction the plugin actually runs two **independent** paths:

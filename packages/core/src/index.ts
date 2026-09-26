@@ -24,4 +24,16 @@ export { EdgeWeightPredictor } from "./edge-predictor.ts";
 export type { FeatureWeights, Features } from "./edge-predictor.ts";
 export { Historian } from "./historian.ts";
 export type { Compartment, HistorianConfig } from "./historian.ts";
+export { runCompartmentTransform } from "./context-compressor.ts";
+export type { TransformDeps } from "./context-compressor.ts";
+export {
+  setActiveTokenizerModel,
+  resolveContextWindow,
+  countClaudeTokens,
+  resolveToolTier,
+  buildToolStub,
+  toEpochMs,
+  msgContentHash,
+  makeMsgTokensMemo,
+} from "./transform-helpers.ts";
 export * from "./providers/index.ts";

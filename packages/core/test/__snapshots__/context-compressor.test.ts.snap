@@ -1,0 +1,278 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`runCompartmentTransform golden snapshots scenario 1: tiny — near-passthrough 1`] = `
+{
+  "count": 3,
+  "ids": [
+    "m0",
+    "m1",
+    "m2",
+  ],
+  "partTypes": [
+    [
+      "text",
+    ],
+    [
+      "text",
+    ],
+    [
+      "text",
+    ],
+  ],
+  "roles": [
+    "user",
+    "assistant",
+    "user",
+  ],
+  "textLens": [
+    12,
+    26,
+    16,
+  ],
+}
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 1: tiny — near-passthrough 2`] = `
+[
+  "/tmp/neural-compartment-status-test-session.json",
+  "/tmp/neural-echo-diag.log",
+  "/tmp/neural-orphan-sweep-test-session.log",
+  "/tmp/neural-rendered-test-session.json",
+  "/tmp/neural-transform-heartbeat.log",
+]
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 2: giant — heavy tail-cut, bounded, newest preserved 1`] = `
+{
+  "count": 312,
+  "firstId": null,
+  "lastId": "m599",
+  "lastTextLen": 506,
+}
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 3: tool-heavy — microCompact stubs oversized tool outputs 1`] = `
+{
+  "count": 41,
+  "roles": [
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+  ],
+  "toolOutLens": [
+    [],
+    [
+      2247,
+    ],
+    [],
+    [],
+    [],
+    [
+      2247,
+    ],
+    [],
+    [],
+    [],
+    [
+      2247,
+    ],
+    [],
+    [],
+    [],
+    [
+      2248,
+    ],
+    [],
+    [],
+    [],
+    [
+      2248,
+    ],
+    [],
+    [],
+    [],
+    [
+      2249,
+    ],
+    [],
+    [],
+    [],
+    [
+      2249,
+    ],
+    [],
+    [],
+    [],
+    [
+      2249,
+    ],
+    [],
+    [],
+    [],
+    [
+      2249,
+    ],
+    [],
+    [],
+    [],
+    [
+      2249,
+    ],
+    [],
+    [],
+    [],
+  ],
+  "truncatedIndices": [
+    1,
+    5,
+    9,
+    13,
+    17,
+    21,
+    25,
+    29,
+    33,
+    37,
+  ],
+}
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 3: tool-heavy — microCompact stubs oversized tool outputs 2`] = `
+[
+  "/tmp/neural-compartment-status-test-session.json",
+  "/tmp/neural-echo-diag.log",
+  "/tmp/neural-orphan-sweep-test-session.log",
+  "/tmp/neural-rendered-test-session.json",
+  "/tmp/neural-transform-heartbeat.log",
+]
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 4: mid-turn — orphan sweep + trailing boundary + newest exemption 1`] = `
+{
+  "count": 7,
+  "ids": [
+    "m0",
+    "m1",
+    "m2",
+    "m3",
+    "m5",
+    "m6",
+    "m7",
+  ],
+  "partTypes": [
+    [
+      "text",
+    ],
+    [
+      "text",
+    ],
+    [
+      "text",
+      "tool_call",
+    ],
+    [
+      "text",
+      "tool_result",
+    ],
+    [
+      "text",
+      "tool_call",
+    ],
+    [
+      "text",
+      "tool_result",
+    ],
+    [
+      "text",
+      "tool_result",
+    ],
+  ],
+  "roles": [
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "assistant",
+    "user",
+    "user",
+  ],
+}
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 5: with-compartments — tail starts after last compartment endMessageId 1`] = `
+{
+  "count": 59,
+  "firstId": "m41",
+  "lastId": "m99",
+}
+`;
+
+exports[`runCompartmentTransform golden snapshots scenario 6: idempotency — second call is a no-op (RENDERED_SENTINEL guard) 1`] = `
+{
+  "count": 3,
+  "ids": [
+    "m0",
+    "m1",
+    "m2",
+  ],
+  "partTypes": [
+    [
+      "text",
+    ],
+    [
+      "text",
+    ],
+    [
+      "text",
+    ],
+  ],
+  "roles": [
+    "user",
+    "assistant",
+    "user",
+  ],
+  "textLens": [
+    22,
+    22,
+    24,
+  ],
+}
+`;
