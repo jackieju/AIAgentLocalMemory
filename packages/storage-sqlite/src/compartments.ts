@@ -43,6 +43,13 @@ export class CompartmentStore {
     this.db.exec(
       `CREATE INDEX IF NOT EXISTS idx_compartments_session ON compartments(session_id, start_ord)`
     );
+    // Idempotent migration: ALTER throws if the column already exists; SQLite
+    // has no "ADD COLUMN IF NOT EXISTS", so the empty catch is the guard.
+    try {
+      this.db.exec(`ALTER TABLE compartments ADD COLUMN embedding TEXT`);
+    } catch {
+      /* column already present */
+    }
   }
 
   dropAndRecreate(): void {
@@ -73,10 +80,27 @@ export class CompartmentStore {
   getForSession(sessionId: string): Compartment[] {
     const rows = this.db
       .prepare(
-        `SELECT id, session_id as sessionId, start_ord as startOrd, end_ord as endOrd, start_message_id as startMessageId, end_message_id as endMessageId, p1, p2, p3, token_count as tokenCount, created_at as createdAt FROM compartments WHERE session_id = ? ORDER BY start_ord ASC`
+        `SELECT id, session_id as sessionId, start_ord as startOrd, end_ord as endOrd, start_message_id as startMessageId, end_message_id as endMessageId, p1, p2, p3, token_count as tokenCount, created_at as createdAt, embedding FROM compartments WHERE session_id = ? ORDER BY start_ord ASC`
       )
-      .all(sessionId) as CompartmentRow[];
-    return rows;
+      .all(sessionId) as Array<CompartmentRow & { embedding?: string | null }>;
+    return rows.map((r) => {
+      const { embedding, ...rest } = r;
+      if (embedding) {
+        try {
+          const vec = JSON.parse(embedding);
+          if (Array.isArray(vec)) return { ...rest, embedding: vec };
+        } catch {
+          /* corrupt/absent embedding → treat as unembedded */
+        }
+      }
+      return rest;
+    });
+  }
+
+  saveEmbedding(id: number, vec: number[]): void {
+    this.db
+      .prepare(`UPDATE compartments SET embedding = ? WHERE id = ?`)
+      .run(JSON.stringify(vec), id);
   }
 
   getMaxOrd(sessionId: string): number {

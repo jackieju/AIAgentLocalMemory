@@ -15,7 +15,7 @@ export { Deduplicator } from "./deduplicator.ts";
 export { CrossSessionLinker } from "./cross-session-linker.ts";
 export { LightweightLinker } from "./lightweight-linker.ts";
 export { LLMExtractor } from "./llm-extractor.ts";
-export { EmbeddingLinker } from "./embedding-linker.ts";
+export { EmbeddingLinker, cosineSimilarity } from "./embedding-linker.ts";
 export { HierarchicalGraph } from "./hierarchical-graph.ts";
 export { OperationLog } from "./operation-log.ts";
 export type { Operation } from "./operation-log.ts";
