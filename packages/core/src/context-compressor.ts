@@ -70,13 +70,185 @@ export interface TransformDeps {
   log?: (e: { file: string; text: string; append?: boolean }) => void;
 }
 
+export interface TailPolicy {
+  budgetTokens: number;
+  recencyCap?: { maxMsgs: number; maxAgeMs: number };
+}
+
+export interface StrategyContext {
+  contextLimit: number;
+  targetUsagePct: number;
+  systemToolsReserveTokens: number;
+  breakerFactor: number;
+  usagePct: number;
+  emitSummaries: boolean;
+}
+
+export interface CompressionStrategyHooks {
+  resolveTailPolicy: (ctx: StrategyContext) => TailPolicy;
+}
+
+function tailPolicyB(ctx: StrategyContext): TailPolicy {
+  return {
+    budgetTokens: Math.max(
+      Math.round(ctx.contextLimit * 0.1),
+      Math.round((Math.round(ctx.contextLimit * ctx.targetUsagePct) - ctx.systemToolsReserveTokens) * ctx.breakerFactor),
+    ),
+  };
+}
+
+function tailPolicyA(ctx: StrategyContext): TailPolicy {
+  return { ...tailPolicyB(ctx), recencyCap: { maxMsgs: 20, maxAgeMs: 24 * 60 * 60 * 1000 } };
+}
+
+// SAFETY: output MUST be pure-text role=user messages with NO tool_result — a
+// tool_result here whose tool_use was dropped triggers Anthropic pre-stream 400
+// ("message vanishes" bug). The downstream orphan-sweep pairs by id, not position.
+export function renderCompartmentsB(skippedMsgs: any[], skippedCount: number): any[] {
+  const skippedSummaries: string[] = [];
+  for (const m of skippedMsgs) {
+    if (m.info?.role !== "user") continue;
+    const text = (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ").trim();
+    if (text.length < 5) continue;
+    skippedSummaries.push(text.slice(0, 80));
+    if (skippedSummaries.length >= 50) break;
+  }
+  if (skippedSummaries.length === 0) return [];
+  return [{
+    info: { role: "user" },
+    parts: [{ type: "text", text: `<earlier-topics count="${skippedCount} messages not shown">\n${skippedSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</earlier-topics>` }],
+  }];
+}
+
+// Relevance-ranked compartment renderer shared by B (FTS-only) and D (FTS fused
+// with embedding semantics x time-decay). ONE bounded FTS query per turn (no
+// getAllNodes, no bulk embedding load — build#57 OOM guard). Episodes join
+// compartments by the ord coordinate stamped at safePutNode; old graph nodes lack
+// it, so their compartments score 0 and fall to recency order — the documented
+// graceful degradation. D fusion is opt-in: only fires when embedQuery is provided
+// AND the compartment already has a cached embedding; otherwise falls back to FTS.
+export interface RenderCompartmentsCtx {
+  query: string;
+  storage: { searchWithScores: (q: string, n: number) => Promise<Array<{ node: any; score: number }>> };
+  countClaudeTokens: (t: string) => number;
+  sessionId: string;
+  historyBudgetTokens: number;
+  timeDecay?: boolean;
+  halfLifeRank?: number;
+  embedQuery?: (q: string) => Promise<number[] | undefined>;
+  semanticWeight?: number;
+  // When false (default), compartments are ordered PURELY chronologically (like
+  // magic-context / Claude Code): newest gets richest tier, no FTS/embedding relevance
+  // re-ranking. This is the safe default — it CANNOT invert time order, so a later
+  // correction never loses budget to an earlier (now-wrong) conclusion. When true,
+  // FTS (B) or FTS+embedding (D) relevance re-ranks compartments, which risks pulling
+  // a stale earlier conclusion ahead of its later correction (see COMPRESSION-STRATEGIES).
+  relevanceRanking?: boolean;
+}
+
+export async function renderCompartmentsCD(comps: any[], ctx: RenderCompartmentsCtx): Promise<any[]> {
+  if (comps.length === 0) return [];
+  const q = (ctx.query ?? "").trim();
+  const useRelevance = ctx.relevanceRanking === true;
+  let hits: Array<{ node: any; score: number }> = [];
+  if (useRelevance && q.length >= 2) {
+    try { hits = await ctx.storage.searchWithScores(q, 50); } catch { hits = []; }
+  }
+  // Aggregate: each compartment's score = max score among hit episodes whose stamped
+  // ord lies in [startOrd,endOrd] and whose session matches. max() (not sum) avoids
+  // long-compartment bias — one strongly-relevant episode shouldn't lose to many weak.
+  const scored = comps.map((c, idx) => {
+    let s = 0;
+    for (const h of hits) {
+      const md = h.node?.metadata;
+      const ord = typeof md?.ord === "number" ? md.ord : undefined;
+      if (ord === undefined) continue;
+      if (h.node?.sourceSession && ctx.sessionId && h.node.sourceSession !== ctx.sessionId) continue;
+      if (ord >= c.startOrd && ord <= c.endOrd && h.score > s) s = h.score;
+    }
+    return { c, idx, score: s };
+  });
+  // D fusion: blend FTS score with query-vs-compartment embedding cosine. Only when
+  // embedQuery is provided (D + provider configured) and cost is bounded — ONE query
+  // embed + cosine against the few dozen already-cached compartment vectors, never a
+  // bulk load. Per-compartment fallback to FTS-only when its embedding is absent.
+  if (useRelevance && ctx.embedQuery && q.length >= 2) {
+    let qVec: number[] | undefined;
+    try { qVec = await ctx.embedQuery(q); } catch { qVec = undefined; }
+    if (qVec && qVec.length > 0) {
+      const w = typeof ctx.semanticWeight === "number" ? Math.min(1, Math.max(0, ctx.semanticWeight)) : 0.5;
+      for (const e of scored) {
+        const cVec = (e.c as any).embedding;
+        if (Array.isArray(cVec) && cVec.length === qVec.length) {
+          let dot = 0, na = 0, nb = 0;
+          for (let i = 0; i < qVec.length; i++) { dot += qVec[i] * cVec[i]; na += qVec[i] * qVec[i]; nb += cVec[i] * cVec[i]; }
+          const cos = na > 0 && nb > 0 ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+          const sem = cos < 0 ? 0 : cos;
+          e.score = (1 - w) * e.score + w * sem;
+        }
+      }
+    }
+  }
+  if (ctx.timeDecay) {
+    const half = ctx.halfLifeRank && ctx.halfLifeRank > 0 ? ctx.halfLifeRank : 5;
+    const n = scored.length;
+    for (const e of scored) {
+      const ageRank = n - 1 - e.idx;
+      e.score *= Math.exp((-Math.LN2 * ageRank) / half);
+    }
+  }
+  // Greedy tier assignment under token budget. Sort by score desc; walk down giving p1
+  // until budget would overflow, then p2, then p3. Floor: top-K=min(3,count) keep >=p3;
+  // lowest-scoring overflow dropped entirely. Real token cost, not nominal caps.
+  // Budget-fill priority. relevance ON: highest FTS/semantic score first, recency
+  // tie-break (higher idx = later message wins on equal score). relevance OFF (default):
+  // pure recency — newest compartment (highest idx) gets richest tier, so a later
+  // correction can never lose budget to an earlier now-wrong conclusion.
+  const order = useRelevance
+    ? [...scored].sort((a, b) => b.score - a.score || b.idx - a.idx)
+    : [...scored].sort((a, b) => b.idx - a.idx);
+  const topK = Math.min(3, order.length);
+  const tierByIdx = new Map<number, string>();
+  let used = 0;
+  for (let rank = 0; rank < order.length; rank++) {
+    const e = order[rank];
+    const p1 = (e.c.p1 ?? "").trim(), p2 = (e.c.p2 ?? "").trim(), p3 = (e.c.p3 ?? "").trim();
+    const t1 = p1 ? ctx.countClaudeTokens(p1) : Infinity;
+    const t2 = p2 ? ctx.countClaudeTokens(p2) : Infinity;
+    const t3 = p3 ? ctx.countClaudeTokens(p3) : Infinity;
+    if (p1 && used + t1 <= ctx.historyBudgetTokens) { tierByIdx.set(e.idx, p1); used += t1; }
+    else if (p2 && used + t2 <= ctx.historyBudgetTokens) { tierByIdx.set(e.idx, p2); used += t2; }
+    else if (p3 && used + t3 <= ctx.historyBudgetTokens) { tierByIdx.set(e.idx, p3); used += t3; }
+    else if (rank < topK && p3) { tierByIdx.set(e.idx, p3); used += t3; }
+  }
+  const lines: string[] = [];
+  for (let i = 0; i < scored.length; i++) {
+    const text = tierByIdx.get(i);
+    if (text) lines.push(text);
+  }
+  if (lines.length === 0) return [];
+  return [{
+    info: { role: "user" },
+    parts: [{ type: "text", text: `<earlier-topics count="${comps.length} compartments">\n${lines.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</earlier-topics>` }],
+  }];
+}
+
+const STRATEGIES: Record<string, CompressionStrategyHooks> = {
+  A: { resolveTailPolicy: tailPolicyA },
+  // B and C both use tailPolicyB and the same p1/p2/p3 compartment renderer
+  // (post B+C merge); C is a backward-compat alias for B. Do not dedupe them.
+  B: { resolveTailPolicy: tailPolicyB },
+  C: { resolveTailPolicy: tailPolicyB },
+  D: { resolveTailPolicy: tailPolicyA },
+};
+
 export async function runCompartmentTransform(input: any, output: any, deps: TransformDeps): Promise<void> {
     // Phase-1 dependency injection (form 2): non-mutable deps destructured to same-name locals
     // (body stays byte-identical), the 9 cross-call mutable states live on deps.state so writes
     // propagate back to the plugin closure (currentOpenCodeSessionId is also read by system.transform).
     // Boundary cast to `any`: the typed TransformDeps contract lives on the signature above; the
     // frozen incident-history body must NOT be re-type-checked, so locals stay effectively `any`.
-    const { getContextUsage, compartmentStore, openCodeDb, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory } = deps as any;
+    const { getContextUsage, compartmentStore, openCodeDb, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery } = deps as any;
     const state = deps.state;
     const emitDiag = (deps.log as ((e: { file: string; text: string; append?: boolean }) => void) | undefined) ?? (() => {});
       try { emitDiag({ file: "/tmp/neural-transform-heartbeat.log", text: `${new Date().toISOString()} msgs=${output.messages?.length ?? 0}\n`, append: true }); } catch {}
@@ -227,8 +399,10 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         setActiveTokenizerModel(lastAssistantModel?.modelID ?? state.lastModelKey);
 
         const contextLimit = pluginConfig.contextWindowTokens ?? resolveContextWindow(state.lastModelKey);
+        const compressionStrategy = pluginConfig.compressionStrategy ?? "B";
+        const emitSummaries = pluginConfig.summaries !== false;
         const EXECUTE_THRESHOLD = 65;
-        const HISTORY_BUDGET_PCT = 0.15;
+        const HISTORY_BUDGET_PCT = pluginConfig.historyBudgetPct ?? 0.15;
         const PROTECTED_TAGS_COUNT = pluginConfig.protectedTags ?? 20;
         const CLEAR_REASONING_AGE = 50;
         const TRIGGER_BUDGET_PCT = 0.05;
@@ -319,10 +493,12 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         // 413s again. Each consecutive failure halves the tail budget (down to a
         // floor) so the wire request drops below the limit even without compaction.
         const breakerFactor = Math.max(0.25, Math.pow(0.5, Math.min(state.historianFailureCount, 3)));
-        const tailBudgetTokens = Math.max(
-          Math.round(contextLimit * 0.1),
-          Math.round((Math.round(contextLimit * TARGET_USAGE_PCT) - systemToolsReserveTokens) * breakerFactor),
-        );
+        const strategyHooks = STRATEGIES[compressionStrategy] ?? STRATEGIES.B;
+        const tailPolicy = strategyHooks.resolveTailPolicy({
+          contextLimit, targetUsagePct: TARGET_USAGE_PCT, systemToolsReserveTokens,
+          breakerFactor, usagePct, emitSummaries,
+        });
+        const tailBudgetTokens = tailPolicy.budgetTokens;
 
         // L1 microCompact MUST run before the L2 budget scan below: it stubs oversized
         // tool outputs on messages[] so the scan measures post-stub sizes. Mutating
@@ -481,6 +657,18 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
             startIdx = Math.max(floor, state.lastTailStartIdx);
           }
           state.lastTailStartIdx = startIdx;
+
+          if (tailPolicy.recencyCap) {
+            const { maxMsgs, maxAgeMs } = tailPolicy.recencyCap;
+            const nowMs = Date.now();
+            let capIdx = Math.max(floor, messages.length - maxMsgs);
+            for (let i = messages.length - 1; i >= floor; i--) {
+              const ts = toEpochMs(messages[i]?.info?.time?.created);
+              if (ts > 0 && nowMs - ts > maxAgeMs) { capIdx = Math.max(capIdx, i + 1); break; }
+            }
+            startIdx = Math.max(startIdx, capIdx);
+            state.lastTailStartIdx = startIdx;
+          }
 
           tail = messages.slice(startIdx);
           if (tail.length === 0) {
@@ -761,22 +949,39 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         if (rendered.length > 0) {
           const skippedCount = tailActualStart - tailStart;
           if (skippedCount > 20) {
-            const skippedSummaries: string[] = [];
-            for (let i = tailStart; i < tailActualStart; i++) {
-              const m = messages[i];
-              if (m.info?.role !== "user") continue;
-              const text = (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ").trim();
-              if (text.length < 5) continue;
-              skippedSummaries.push(text.slice(0, 80));
-              if (skippedSummaries.length >= 50) break;
+            let compartMsgs: any[] = [];
+            if ((compressionStrategy === "B" || compressionStrategy === "C" || compressionStrategy === "D") && emitSummaries !== false) {
+              const comps = (compartmentStore?.getForSession?.(sessionId) ?? []).filter(
+                (c: any) => c.startOrd < tailStart,
+              );
+              if (comps.length > 0) {
+                const qParts: string[] = [];
+                for (let i = messages.length - 1; i >= 0 && qParts.length < 3; i--) {
+                  const m = messages[i];
+                  if (m.info?.role !== "user") continue;
+                  const t = (m.parts ?? []).filter((p: any) => p.type === "text").map((p: any) => (p as { text?: string }).text ?? "").join(" ").trim();
+                  if (t.length >= 5) qParts.unshift(t.slice(0, 500));
+                }
+                compartMsgs = await renderCompartmentsCD(comps, {
+                  query: qParts.join(" "),
+                  storage,
+                  countClaudeTokens,
+                  sessionId,
+                  historyBudgetTokens,
+                  timeDecay: compressionStrategy === "D",
+                  halfLifeRank: pluginConfig.halfLifeRank,
+                  embedQuery: compressionStrategy === "D" ? embedQuery : undefined,
+                  semanticWeight: pluginConfig.semanticWeight,
+                  relevanceRanking: pluginConfig.ftsRelevanceRanking === true,
+                });
+              }
+              if (compartMsgs.length === 0) {
+                compartMsgs = renderCompartmentsB(messages.slice(tailStart, tailActualStart), skippedCount);
+              }
+            } else {
+              compartMsgs = renderCompartmentsB(messages.slice(tailStart, tailActualStart), skippedCount);
             }
-            if (skippedSummaries.length > 0) {
-              const summaryMsg = {
-                info: { role: "user" },
-                parts: [{ type: "text", text: `<earlier-topics count="${skippedCount} messages not shown">\n${skippedSummaries.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</earlier-topics>` }]
-              };
-              rendered.unshift(summaryMsg);
-            }
+            if (compartMsgs.length > 0) rendered.unshift(...compartMsgs);
           }
 
           // Orphan tool_result sweep (Pass A/B/C). Anthropic returns a pre-stream 400

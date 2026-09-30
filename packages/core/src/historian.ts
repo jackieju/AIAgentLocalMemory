@@ -12,6 +12,8 @@ export interface Compartment {
   p3: string;
   tokenCount: number;
   createdAt: number;
+  // Cached p1-text embedding for D-strategy fusion; undefined when unembedded.
+  embedding?: number[];
 }
 
 export interface HistorianConfig {

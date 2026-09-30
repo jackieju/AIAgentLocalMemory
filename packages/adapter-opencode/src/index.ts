@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker, runCompartmentTransform, setActiveTokenizerModel, resolveContextWindow, countClaudeTokens, resolveToolTier, buildToolStub, toEpochMs, makeMsgTokensMemo } from "@ai-agent-local-memory/core";
+import { NeuralContextEngine, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, FallbackEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker, runCompartmentTransform, setActiveTokenizerModel, resolveContextWindow, countClaudeTokens, resolveToolTier, buildToolStub, toEpochMs, makeMsgTokensMemo } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 
@@ -18,6 +18,20 @@ interface PluginConfig {
   syncRepo?: string;
   recallStrategy?: "plugin" | "llm";
   readExtractBackend?: "server" | "local";
+  // A=recency window+P1-P5 age; B=magic-context dynamic tail (DEFAULT), p1/p2/p3 by FTS relevance (absorbs former C); D=FTS+embedding semantic fusion×time-decay, tail min(20msgs,24h)
+  compressionStrategy?: "A" | "B" | "C" | "D";
+  // B/D only: false → rendering falls back to the 80-char earlier-topics list instead
+  // of p1/p2/p3 tiers. Generation is untouched (p1/p2/p3 ARE the compartment body).
+  summaries?: boolean;
+  // D only: recency half-life in compartment ranks for time-decay (default 5).
+  halfLifeRank?: number;
+  // D only: embedding-vs-FTS fusion weight in [0,1] (default 0.5). 0=FTS-only, 1=semantic-only.
+  semanticWeight?: number;
+  // B/D compartment ordering. false (DEFAULT) = pure chronological like magic-context:
+  // newest compartment gets richest tier, no relevance re-ranking — a later correction
+  // can NEVER lose budget to an earlier now-wrong conclusion. true = relevance re-ranks
+  // (better topical recall, but risks time inversion — see COMPRESSION-STRATEGIES).
+  ftsRelevanceRanking?: boolean;
   llm?: {
     provider: "openai" | "ollama" | "custom";
     baseUrl?: string;
@@ -29,6 +43,15 @@ interface PluginConfig {
     baseUrl?: string;
     apiKey?: string;
     model?: string;
+    // Optional secondary provider. When set, embedding auto-falls-back to it if the
+    // primary throws (e.g. local ollama down), so strategy D keeps working instead of
+    // silently degrading to FTS-only. Must produce the SAME vector dimensions as primary.
+    fallback?: {
+      provider: "openai" | "ollama" | "custom";
+      baseUrl?: string;
+      apiKey?: string;
+      model?: string;
+    };
   };
   localLlm?: {
     provider: "ollama" | "openai" | "custom";
@@ -203,6 +226,23 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const NODE_ALLOW_TYPES = new Set([
     "episode", "fact", "concept", "assertion", "definition", "experience", "meta", "filler", "value", "culture",
   ]);
+  // ord = dense session sequence shared with compartments' startOrd/endOrd, letting
+  // C/D range-join episodes to compartments. Only NEW nodes (with messageId) get it.
+  const ordMapCache = new Map<string, { map: Map<string, number>; at: number }>();
+  function resolveOrd(sid: string, messageId: string): number | undefined {
+    if (!sid || !messageId) return undefined;
+    let entry = ordMapCache.get(sid);
+    if (!entry || Date.now() - entry.at > 15000) {
+      try {
+        const m = new Map<string, number>();
+        for (const r of getSessionMessageList(sid)) m.set(r.id, r.ord);
+        entry = { map: m, at: Date.now() };
+        ordMapCache.set(sid, entry);
+      } catch { return undefined; }
+    }
+    return entry.map.get(messageId);
+  }
+
   async function safePutNode(node: any, opts?: { fromToolOutput?: boolean }): Promise<boolean> {
     try {
       if (opts?.fromToolOutput === true) return false;
@@ -213,6 +253,12 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
       // Reject raw tool-output signatures: JSON result envelopes and result markers.
       if (/^\s*\{[\s\S]*"(output|stdout|stderr|tool_result|exit_code)"\s*:/.test(c)) return false;
       if (/\[tool[_-]?result\]|\[replay-shortcircuit\]/i.test(c)) return false;
+      // Stamp session-ord coordinate for C/D compartment range-join (choke-point).
+      const mid = node?.metadata?.messageId;
+      if (node.type === "episode" && typeof mid === "string" && node.sourceSession) {
+        const ord = resolveOrd(node.sourceSession, mid);
+        if (typeof ord === "number") node.metadata = { ...(node.metadata ?? {}), ord };
+      }
       await storage.putNode(node);
       return true;
     } catch {
@@ -237,16 +283,20 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   }
 
   if (pluginConfig.embedding) {
-    const c = pluginConfig.embedding;
-    if (c.provider === "ollama") {
-      embeddingProvider = new OllamaEmbedding({ model: c.model });
-    } else if (c.provider === "openai" || c.provider === "custom") {
-      embeddingProvider = new OpenAICompatibleEmbedding({
-        baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
-        apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
-        embeddingModel: c.model,
-      });
-    }
+    const makeEmbedder = (c: { provider: string; baseUrl?: string; apiKey?: string; model?: string }): EmbeddingProvider | undefined => {
+      if (c.provider === "ollama") return new OllamaEmbedding({ model: c.model });
+      if (c.provider === "openai" || c.provider === "custom") {
+        return new OpenAICompatibleEmbedding({
+          baseUrl: c.baseUrl ?? "https://api.openai.com/v1",
+          apiKey: c.apiKey ?? process.env.OPENAI_API_KEY,
+          embeddingModel: c.model,
+        });
+      }
+      return undefined;
+    };
+    const primary = makeEmbedder(pluginConfig.embedding);
+    const secondary = pluginConfig.embedding.fallback ? makeEmbedder(pluginConfig.embedding.fallback) : undefined;
+    embeddingProvider = primary && secondary ? new FallbackEmbedding(primary, secondary) : primary;
   }
 
   let localLlmProvider: LLMProvider | undefined;
@@ -685,7 +735,7 @@ Return a JSON array. If nothing qualifies, return [].`;
           const windowMsgs = getSessionMessagePartsForOrds(sid, lastEndOrd + 1, lastEndOrd + chunkSize);
           if (windowMsgs.length < 6) return;
           const result = await (historian as any).compress(sid, windowMsgs);
-          if (result) compartmentStore.save(result);
+          if (result) { compartmentStore.save(result); embedCompartmentBg(result); }
           writeFileSync("/tmp/neural-init-compress.log", JSON.stringify({ ts: Date.now(), pct, chunkSize, success: !!result }));
         }
       } catch {}
@@ -713,6 +763,7 @@ Return a JSON array. If nothing qualifies, return [].`;
           lastAccessed: Date.now(),
           createdAt: Date.now(),
           sourceSession: sessionId,
+          metadata: { messageId: msg.info.id },
         });
       }
     } catch {}
@@ -780,6 +831,7 @@ Return a JSON array. If nothing qualifies, return [].`;
             lastAccessed: Date.now(),
             createdAt: Date.now(),
             sourceSession: sessionId,
+            metadata: { messageId: msg.info.id },
           });
         }
       }
@@ -1311,7 +1363,8 @@ JSON array of stale indexes:`;
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000));
         const result = await Promise.race([compressPromise, timeoutPromise]).catch(() => null) as any;
         if (result) {
-          compartmentStore.save(result);
+          const __saved = compartmentStore.save(result);
+          embedCompartmentBg(__saved);
           lastCompressTime = Date.now();
           try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
         }
@@ -1335,6 +1388,12 @@ Output STRICT JSON: { "p1": "...", "p2": "...", "p3": "..." }
 p1: One paragraph (≤150 tokens). Capture: user goals, decisions made, files/symbols touched, errors hit, current state. Past tense. No filler.
 p2: One sentence (≤25 tokens). The single most important thing that happened.
 p3: A title (≤8 tokens). Like a git commit subject.
+
+CHRONOLOGY & CORRECTIONS: Analyze the conversation in time order. When a later message
+corrects, reverses, or supersedes an earlier statement (e.g. "actually X was wrong, it's Y",
+a fixed value, a changed decision), the summary MUST reflect the LATEST state as the truth
+and note that the earlier one was superseded (e.g. "first tried X, then corrected to Y").
+Never present a conclusion that was later overturned as if it still holds.
 
 IMPORTANT: Write p1, p2, p3 in the SAME LANGUAGE the user uses in the conversation. If user writes Chinese, output Chinese. If English, output English.
 Preserve concrete identifiers verbatim: file paths, function names, error strings. Drop pleasantries and tool boilerplate.
@@ -1363,7 +1422,7 @@ JSON:`;
             try {
               const parsed = JSON.parse(jsonMatch[0]);
               if (parsed.p1 && parsed.p2 && parsed.p3) {
-                compartmentStore.save({
+                const __saved = compartmentStore.save({
                   sessionId: openCodeSessionId,
                   startOrd: windowMsgs[0].ord,
                   endOrd: windowMsgs[windowMsgs.length - 1].ord,
@@ -1377,6 +1436,7 @@ JSON:`;
                   tokenCount: Math.round((String(parsed.p1).length + String(parsed.p2).length + String(parsed.p3).length) / 4),
                   createdAt: Date.now(),
                 });
+                embedCompartmentBg(__saved);
                 historianFailureCount = 0;
                 lastCompressTime = Date.now();
                 try { rawStorage.getDb().prepare(`INSERT OR REPLACE INTO kv (key, value) VALUES ('last_compress_time', ?)`).run(String(lastCompressTime)); } catch {}
@@ -1498,6 +1558,33 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
     return prompt;
   }
 
+  // D-strategy semantic fusion helpers. build#57 OOM contract: NEVER await these on the
+  // hot path. embedCompartmentBg = fire-and-forget background embed of a saved compartment.
+  const embedCompartmentBg = (comp: any): void => {
+    if (!embeddingProvider || !comp?.id || !comp?.p1) return;
+    Promise.resolve()
+      .then(async () => {
+        const [vec] = await embeddingProvider!.embed([String(comp.p1)]);
+        if (Array.isArray(vec) && vec.length > 0) compartmentStore.saveEmbedding(comp.id, vec);
+      })
+      .catch(() => {});
+  };
+  // embedQueryCached: ONE query embed per turn, memoized on the query hash so repeated
+  // turns with the same trailing user text don't re-hit the API. Bounded LRU (32 entries).
+  const __qEmbedCache = new Map<string, number[]>();
+  const embedQuery = embeddingProvider
+    ? async (q: string): Promise<number[] | undefined> => {
+        const key = String(q);
+        const hit = __qEmbedCache.get(key);
+        if (hit) return hit;
+        const [vec] = await embeddingProvider!.embed([key]);
+        if (!Array.isArray(vec) || vec.length === 0) return undefined;
+        if (__qEmbedCache.size >= 32) __qEmbedCache.delete(__qEmbedCache.keys().next().value as string);
+        __qEmbedCache.set(key, vec);
+        return vec;
+      }
+    : undefined;
+
   // Phase-1 dependency-injection bundle. Non-mutable deps are the real closure symbols; `state`
   // is a getter/setter proxy onto the 9 cross-call mutable `let`s so the extracted function can
   // read/write them by name AND system.transform keeps reading the outer `let currentOpenCodeSessionId`.
@@ -1506,7 +1593,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
     getContextUsage, hasNativeUsage: true, compartmentStore, openCodeDb, historian, pendingIdleWork, pluginConfig,
     rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub,
     resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags,
-    droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory,
+    droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery,
     log: (e: { file: string; text: string; append?: boolean }) => {
       try { writeFileSync(e.file, e.text, e.append ? { flag: "a" } : {}); } catch {}
     },
@@ -1543,7 +1630,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
       const agentCfg = { ...(config.agent ?? {}) };
       if (!agentCfg["neural-historian"]) {
         agentCfg["neural-historian"] = {
-          prompt: "You compress conversation history. Output STRICT JSON only: {\"p1\":\"...\",\"p2\":\"...\",\"p3\":\"...\"}. p1: paragraph <=150 tokens capturing goals, decisions, files/symbols, errors, current state. p2: single sentence <=25 tokens. p3: title <=8 tokens. Use same language as the conversation. Preserve concrete identifiers verbatim.",
+          prompt: "You compress conversation history. Output STRICT JSON only: {\"p1\":\"...\",\"p2\":\"...\",\"p3\":\"...\"}. p1: paragraph <=150 tokens capturing goals, decisions, files/symbols, errors, current state. p2: single sentence <=25 tokens. p3: title <=8 tokens. Analyze in time order: when a later message corrects/reverses/supersedes an earlier one, reflect the LATEST state as truth and note the earlier was superseded; never present an overturned conclusion as still valid. Use same language as the conversation. Preserve concrete identifiers verbatim.",
           mode: "subagent",
           hidden: true,
           maxSteps: 3,
@@ -2830,7 +2917,8 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
             if (windowMsgs.length >= 6) {
               const result = await (historian as any).compress(sessionId, windowMsgs);
               if (result) {
-                compartmentStore.save(result);
+                const __saved = compartmentStore.save(result);
+                embedCompartmentBg(__saved);
                 output.response = `Recompacted: created compartment covering ordinals ${result.startOrd}-${result.endOrd}`;
               } else {
                 output.response = "Recompaction failed — historian returned null.";
