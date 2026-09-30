@@ -81,8 +81,11 @@ Used for **memory extraction, historian summarization, and building embedding se
 | `embedding.baseUrl` | `string` | falls back to `llm.baseUrl` or `http://localhost:6655/openai/v1` | API endpoint |
 | `embedding.apiKey` | `string` | falls back to `llm.apiKey` or `$OPENAI_API_KEY` | API key |
 | `embedding.model` | `string` | — | e.g. `text-embedding-3-small` |
+| `embedding.fallback` | same shape as `embedding` (provider/baseUrl/apiKey/model) | — | Optional secondary provider. If the primary `embed()` throws (e.g. local ollama down / external drive unmounted), embedding transparently falls back to this one so strategy **D keeps working** instead of silently degrading to FTS-only. |
 
 > The plugin runs without embedding configured — cross-session recall just degrades to pure FTS (may miss when vocabulary doesn't overlap).
+>
+> **Fallback dimension rule:** the fallback provider MUST produce the **same vector dimensions** as the primary (e.g. both 1536-dim). A mismatch corrupts cosine similarity — this is a misconfiguration you must avoid. On a primary failure the fallback is used for ~60s (cooldown), after which the primary is retried once (auto-heals when it recovers).
 
 ---
 
@@ -221,9 +224,13 @@ Sync mechanism (append-only operation log + Git merge):
     "model": "gpt-5-mini"
   },
   "embedding": {
-    "provider": "openai",
-    "baseUrl": "http://localhost:6655/openai/v1",
-    "model": "text-embedding-3-small"
+    "provider": "ollama",
+    "model": "nomic-embed-text",
+    "fallback": {
+      "provider": "custom",
+      "baseUrl": "http://team-server:11434/v1",
+      "model": "nomic-embed-text"
+    }
   },
 
   "localLlm": {

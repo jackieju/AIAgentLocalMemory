@@ -81,8 +81,11 @@
 | `embedding.baseUrl` | `string` | 回退到 `llm.baseUrl` 或 `http://localhost:6655/openai/v1` | API 端点 |
 | `embedding.apiKey` | `string` | 回退到 `llm.apiKey` 或 `$OPENAI_API_KEY` | 密钥 |
 | `embedding.model` | `string` | — | 如 `text-embedding-3-small` |
+| `embedding.fallback` | 结构同 `embedding`（provider/baseUrl/apiKey/model） | — | 可选的备用 provider。当主 `embed()` 抛错时（如本地 ollama 挂了 / 外接盘未挂载），embedding 自动切到它，让策略 **D 继续工作**，而不是静默降级为纯 FTS。 |
 
 > 不配 embedding 也能跑，只是跨 session 检索退化为纯 FTS（词汇不重叠时可能召回不到）。
+>
+> **备用维度规则：** 备用 provider 必须产出与主**相同的向量维度**（如都是 1536 维）。维度不一致会破坏余弦相似度——这是必须避免的配置错误。主失败后备用会被用约 60 秒（冷却期），之后重试主一次（主恢复则自愈）。
 
 ---
 
@@ -221,9 +224,13 @@ session 空闲时，agent 可能主动开口问用户「想让我读什么书 / 
     "model": "gpt-5-mini"
   },
   "embedding": {
-    "provider": "openai",
-    "baseUrl": "http://localhost:6655/openai/v1",
-    "model": "text-embedding-3-small"
+    "provider": "ollama",
+    "model": "nomic-embed-text",
+    "fallback": {
+      "provider": "custom",
+      "baseUrl": "http://team-server:11434/v1",
+      "model": "nomic-embed-text"
+    }
   },
 
   "localLlm": {

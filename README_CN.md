@@ -966,6 +966,7 @@ opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
 
 - [配置参考](./docs/CONFIGURATION-REFERENCE_CN.md) ([English](./docs/CONFIGURATION-REFERENCE.md)) — 每一个可配置选项，含默认值与完整示例。
 - [Context 压缩流程](./docs/CONTEXT-COMPRESSION-PIPELINE_CN.md) ([English](./docs/CONTEXT-COMPRESSION-PIPELINE.md)) — 从用户按键到组装 LLM payload 的完整流程。
+- [压缩策略（A/B/C/D）](./docs/COMPRESSION-STRATEGIES_CN.md) ([English](./docs/COMPRESSION-STRATEGIES.md)) — 四个可选策略、各自取舍与适用场景。
 - [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — 智能体如何将常识与伦理培育成它的安全层。
 - [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — 系统架构与安全模型。
 - [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — 对观察者 / 学生 / 主力这三种本地 LLM 模式的逐步讲解。

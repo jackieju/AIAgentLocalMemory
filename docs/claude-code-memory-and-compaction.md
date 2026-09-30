@@ -75,6 +75,12 @@ Claude Code 故意**不使用 RAG / embedding / 向量库**，改用 grep。这�
 - **Task 2 — `recallStrategy` 配置 (`plugin` | `llm`)**：`llm` 模式照抄 Claude Code——
   FTS 建编号候选清单 → `historianLlm` 挑 ≤5 个相关 ID → 失败回退 top FTS。`neural_recall` 按此分支。
   （运行时默认 `recallStrategy ?? "plugin"`。）
+- **transcript MD ≠ 召回来源（重要澄清）**：`transcripts/<sid>.md` 逐字归档整个会话，但它
+  **只归档、不参与插件的任何自动召回**。插件的召回（`neural_recall` / `engine.recall`）一律
+  走神经图（FTS + embedding），从不读 transcript。transcript 唯一被"检索"的场景是：压缩时
+  的截断 stub 会提示 **LLM 自己用 OpenCode 的 `grep` 工具**去 MD 里翻工具输出原文——这是
+  LLM 的手动动作，不是插件的召回逻辑。所以 Claude Code 第三层「存文件 + grep」我们只落地了
+  「存」（归档）+「LLM 手动 grep」，**没有**做成插件自动的 grep 召回。
 
 ### 压缩层（对应五级压缩）
 

@@ -1122,6 +1122,7 @@ Further reading in [`docs/`](./docs):
 
 - [Configuration Reference](./docs/CONFIGURATION-REFERENCE.md) ([中文](./docs/CONFIGURATION-REFERENCE_CN.md)) — every configurable option, with defaults and a full example.
 - [Context Compression Pipeline](./docs/CONTEXT-COMPRESSION-PIPELINE.md) ([中文](./docs/CONTEXT-COMPRESSION-PIPELINE_CN.md)) — the full flow from a user keypress to the assembled LLM payload.
+- [Compression Strategies (A/B/C/D)](./docs/COMPRESSION-STRATEGIES.md) ([中文](./docs/COMPRESSION-STRATEGIES_CN.md)) — the four selectable strategies, their trade-offs, and when to use each.
 - [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — how the agent grows commonsense and ethics as its safety layer.
 - [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — system architecture and the safety model.
 - [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — a walkthrough of the Observer / Student / Primary local-LLM modes.
