@@ -53,7 +53,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
 nav:
-  - Home: readme_simple.md
+  - Home: index.md
   - Guides (English):
       - Context Compression Pipeline: CONTEXT-COMPRESSION-PIPELINE.md
       - Compression Strategies (A/B/C/D): COMPRESSION-STRATEGIES.md
