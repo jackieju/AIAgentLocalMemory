@@ -239,9 +239,16 @@ A second, host-agnostic breaker reacts to the previous turn **actually overflowi
 
 **OpenCode adapter fact signal** (`adapter-opencode`): `getPreviousOverflow` reads the last assistant message in `opencode.db` and matches `error.name === "ContextOverflowError"` (OpenCode's normalized 413 name across every provider — the one and only host-specific token in the whole breaker), parsing `tokensUsed`/`tokensLimit` from the `responseBody`. **It returns `undefined` whenever `compaction.auto !== false`**, because OpenCode then swallows the overflow into its own compaction and leaves no error message — reporting `false` there would be a false reset that disarms the breaker. So the fact signal is only authoritative with `compaction.auto: false` in `opencode.jsonc`.
 
-**Not (yet) implemented** — two Oracle design points deliberately left out:
-- *Open-circuit one-shot notice*: when the circuit opens, core only shrinks the budget; `circuitOpen` is never read to **inject a message** into the rendered output. Injecting into `messages[]` means touching the render hot path (the #277 risk), so it's intentionally skipped.
-- *Hysteresis / cooldown on reset* (Oracle marked optional): reset is a hard reset; there is no one-turn cooldown buffer after recovery.
+**Deliberately NOT done — the breaker shrinks the budget only, it never injects a prompt.** When the circuit opens, core shrinks the tail budget; `circuitOpen` is never read to **inject a "history was compacted" notice** into `messages[]`. This is a design decision, not a gap:
+
+1. **The breaker's purpose is loss-stopping, which an injected prompt does not serve.** The goal is to break the "oversized prompt → 413 → resend same oversized prompt → 413 again → …" loop that silently burns tokens. That loop is broken purely by shrinking the budget until the request fits. Telling the model "your history was compacted" contributes nothing to stopping the loop.
+2. **The one thing such a notice would be *for* — stopping the model from hallucinating the removed history — is proven not to work.** A controlled experiment (ollama #14259) added an explicit "this was removed, don't guess" marker and the model **still confabulated 3/3 buried facts**. A notice cannot fix hallucination-on-compaction; only recovering the actual content can.
+3. **It introduces fresh side effects.** A `role:user` notice can be mis-executed as a user instruction (focus hijack, cf. the Hermes static-placeholder bug), trigger an apology loop / "due to context limits" boilerplate on every reply, or push the model to over-call `neural_recall`. All downside, no upside for the loss-stopping goal.
+
+If "no-memory on heavy compaction" ever needs addressing, the better lever is OpenCode's approach — make the compartment summaries themselves high-fidelity (preserve exact file paths, symbols, decisions like "option C") so the model continues seamlessly without being told anything — not a runtime notice.
+
+*Also not done (Oracle marked optional): hysteresis / cooldown on reset. Reset is a hard reset — an authoritative success immediately zeroes the streak, with no one-turn cooldown buffer.*
+
 
 **N=1 guarantee** (Task 3): if the newest single message already exceeds budget, the budget loop's first-pass break
 leaves startIdx at `length`, falling into slice(-1). Here we force the newest message into the tail — the newest message is never lost.

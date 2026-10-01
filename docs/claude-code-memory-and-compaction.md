@@ -109,7 +109,8 @@ Claude Code 故意**不使用 RAG / embedding / 向量库**，改用 grep。这�
 
 - **L4 的 413 精确版 —— 已纯插件实现（无需 fork）。** 原先以为"看到真实 413 必须 fork opencode 加 `chat.request.transform` hook"，实际证伪：adapter 的 `getPreviousOverflow` 直接从 `opencode.db` 读上一条 assistant 消息的 `error.name === "ContextOverflowError"`（OpenCode 对 413 的归一化名）就能拿到真实溢出事实信号，并解析其 `tokensUsed`/`tokensLimit`，不用 fork。前提：`opencode.jsonc` 设 `compaction.auto: false`（否则 OpenCode 自己吞掉溢出）。详见 `CONTEXT-COMPRESSION-PIPELINE.md` 的「413 context-overflow circuit breaker」节。
 - **L2 精确版**（在请求组装后、看到 system prompt + tools 实际 token 再裁）仍需 fork opencode 加 `chat.request.transform` hook，因为 `messages.transform` 跑在请求组装**之前**。fork PR **#35613**（`jackieju/opencode`，branch `replay-shortcircuit`）被 bot 自动关闭未合并，故 L2 当前仍是**纯插件近似版**（预留 headroom）。
-- **413 断路器两个 Oracle 设计点刻意未做**：(a) 开路后往消息注入一次性提示（会动渲染热路径，#277 风险）；(b) 复位后 hysteresis 冷却一轮（Oracle 标 optional）。当前断路器只收缩 tail 预算、硬复位。
+- **413 断路器刻意不注入"历史已压缩"提示。** 断路器开路时只收缩 tail 预算，不往消息注入提示。这是设计决策不是缺口：(1) 断路器目的是**止损**——打破"超长 prompt→413→重发→再 413"的烧 token 循环，纯靠预算收缩达成，注入提示对此无贡献；(2) 注入提示唯一想解决的"模型幻觉补全被删历史"已被证伪——ollama #14259 对照实验加了明确"别猜"标记，模型仍 3/3 编造；(3) 还引入副作用（role:user 提示被当指令误执行、道歉循环、过度 recall）。若将来要解决重度压缩失忆，更好的杠杆是把 compartment 摘要做成高保真（保留 exact 路径/符号/"方案C"），而非运行时提示。
+- **复位 hysteresis 冷却一轮**（Oracle 标 optional）：当前为硬复位，未做。
 
 ---
 

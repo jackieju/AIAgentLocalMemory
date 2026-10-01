@@ -233,9 +233,16 @@ messages.transform(output)
 
 **OpenCode adapter 事实信号**（`adapter-opencode`）：`getPreviousOverflow` 读 `opencode.db` 里最新一条 assistant 消息，匹配 `error.name === "ContextOverflowError"`（OpenCode 跨所有 provider 对 413 的归一化名 —— 这是整个熔断器里**唯一**的宿主专属字符串），从 `responseBody` 正则解析 `tokensUsed`/`tokensLimit`。**只要 `compaction.auto !== false` 它就返回 `undefined`**，因为那时 OpenCode 把溢出吞进自己的 compaction、不留 error message —— 在那种情况下返回 `false` 会造成假复位、使熔断器失效。所以事实信号只在 `opencode.jsonc` 设 `compaction.auto: false` 时才权威。
 
-**尚未实现** —— 两个 Oracle 设计点刻意没做：
-- *开路后一次性提示注入*：断路器开路时 core 只收缩预算；`circuitOpen` 从不被读来**往渲染结果注入一条消息**。往 `messages[]` 注入意味着动渲染热路径（#277 风险），故刻意跳过。
-- *复位后 hysteresis / 冷却一轮*（Oracle 标 optional）：复位是硬复位，恢复后没有一轮冷却缓冲。
+**刻意不做 —— 断路器只收缩预算，从不注入提示。** 断路器开路时 core 只收缩 tail 预算；`circuitOpen` 从不被读来**往 `messages[]` 注入一条「历史已压缩」提示**。这是一个设计决策，不是缺口：
+
+1. **断路器的目的是止损，注入提示对止损毫无贡献。** 目标是打破「超长 prompt → 413 → 重发同样超长的 prompt → 再 413 → ……」这个默默烧 token 的循环。这个循环纯靠「把预算收缩到请求塞得下」来打破。告诉模型「你的历史被压缩了」对打破循环没有任何帮助。
+2. **这条提示唯一想解决的问题 —— 阻止模型幻觉补全被删掉的历史 —— 已被证明无效。** 一个对照实验（ollama #14259）加了明确的「this was removed, don't guess」标记，模型**仍然 3/3 次编造了被截断的内容**。提示治不好「压缩后幻觉」；只有把真实内容捞回来才行。
+3. **它会引入新的副作用。** 一条 `role:user` 的提示可能被当成用户指令误执行（焦点劫持，参见 Hermes 静态占位符 bug）、在每条回复里触发道歉循环 /「由于上下文限制」套话、或把模型推向过度调用 `neural_recall`。全是坏处，对止损目标无一好处。
+
+如果将来真要解决「重度压缩后模型失忆」，更好的做法是 OpenCode 的路线 —— 把 compartment 摘要本身做成高保真（保留 exact 的文件路径、符号、决策如「方案 C」），让模型无需被告知就能无缝续写 —— 而不是运行时注入提示。
+
+*同样未做（Oracle 标 optional）：复位后的 hysteresis / 冷却一轮。复位是硬复位 —— 权威的成功信号立即把 streak 清零，没有一轮冷却缓冲。*
+
 
 **N=1 保证**（任务3）：若最新单条消息已超预算，budget loop 首轮 break 会把 startIdx 停在 `length`，
 掉进 slice(-1)。这里强制把最新一条纳入 tail —— 最新消息永不丢。
