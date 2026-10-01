@@ -1,0 +1,65 @@
+#!/bin/bash
+# neural-strategy —— 快速切换 ai-agent-local-memory 的上下文压缩方案 (A/B/D)
+#
+# 方案速览（详见 docs/COMPRESSION-STRATEGIES.md）：
+#   A  最省：单一时序 tail，无 compartment / 无 historian 摘要。所有工具输出（含最新）
+#      一律砍到 0 字符，只留工具名+入参+找回引导（去 transcript.md grep 或重跑）。
+#      对话原文按时序保留；预算满时最旧对话整条丢弃（靠 neural_recall 找回）。不需要 embedding。
+#   B  默认：p1/p2/p3 分档，按 FTS 关键词相关度挑档。不需要 embedding。
+#   D  语义：B + embedding 语义融合 + 时间衰减。需要配置 embedding provider，
+#      且 compartment 要有 embedding（新压缩自动补；老数据用 backfill 脚本回填）。
+#
+# 用法：
+#   neural-strategy            查看当前方案
+#   neural-strategy A|B|D      切换到指定方案
+#
+# 切换后需【退出并重启 OpenCode】才生效。
+
+set -u
+
+CONF="$HOME/.config/opencode/neural-context.json"
+红() { printf '\033[31m%s\033[0m\n' "$1"; }
+绿() { printf '\033[32m%s\033[0m\n' "$1"; }
+黄() { printf '\033[33m%s\033[0m\n' "$1"; }
+
+if [ ! -f "$CONF" ]; then 红 "❌ 找不到 $CONF"; exit 1; fi
+
+CUR=$(jq -r '.compressionStrategy // "B"' "$CONF" 2>/dev/null)
+HAS_EMBED=$(jq -r 'if .embedding then "yes" else "no" end' "$CONF" 2>/dev/null)
+
+if [ $# -eq 0 ]; then
+  echo "当前方案: $CUR   (默认 B)"
+  echo "embedding 已配置: $HAS_EMBED"
+  [ "$CUR" = "D" ] && [ "$HAS_EMBED" = "no" ] && 黄 "⚠️  当前是 D 但未配 embedding —— D 会降级为纯 FTS（无语义收益）。"
+  echo
+  echo "切换: neural-strategy A|B|D"
+  exit 0
+fi
+
+NEW="$1"
+case "$NEW" in
+  A|B|D) ;;
+  *) 红 "❌ 无效方案 '$NEW'，只能是 A / B / D。"; exit 1 ;;
+esac
+
+TMP=$(mktemp)
+if jq --arg s "$NEW" '.compressionStrategy = $s' "$CONF" > "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+  mv "$TMP" "$CONF"
+  绿 "✅ 压缩方案已切换: $CUR → $NEW"
+else
+  rm -f "$TMP"; 红 "❌ 写入失败，配置未改动。"; exit 1
+fi
+
+if [ "$NEW" = "D" ] && [ "$HAS_EMBED" = "no" ]; then
+  黄 "⚠️  当前未配 embedding provider —— D 会静默降级为纯 FTS，没有语义收益。"
+  黄 "   需在 neural-context.json 加 \"embedding\": {...} 才能启用 D 的语义融合。"
+fi
+if [ "$NEW" = "D" ]; then
+  黄 "提示：老 compartment 需回填 embedding 才有语义收益："
+  黄 "   PERF_EMBED_KEY=<key> bun benchmark/backfill-compartment-embeddings.ts"
+fi
+
+if pgrep -f "opencode" >/dev/null 2>&1; then
+  echo
+  黄 "⚠️  OpenCode 正在运行 —— 请【退出并重启】后新方案才生效。"
+fi
