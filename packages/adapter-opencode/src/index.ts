@@ -379,6 +379,30 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     } catch { return { percentage: 0, inputTokens: 0 }; }
   }
 
+  function getIsMidTurn(sid: string): boolean | undefined {
+    if (!openCodeDb) return undefined;
+    try {
+      const row = openCodeDb.prepare(
+        `SELECT json_extract(data, '$.finish') AS finish
+         FROM opencode.message
+         WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
+         ORDER BY time_created DESC LIMIT 1`,
+      ).get(sid) as { finish: string | null } | undefined;
+      if (!row) return undefined;
+      return row.finish === "tool-calls";
+    } catch { return undefined; }
+  }
+
+  function getLastUserMessageId(sid: string): string | undefined {
+    if (!openCodeDb) return undefined;
+    try {
+      const row = openCodeDb.prepare(
+        `SELECT id FROM opencode.message WHERE session_id = ? AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1`,
+      ).get(sid) as { id: string } | undefined;
+      return row?.id;
+    } catch { return undefined; }
+  }
+
   function getSessionMessageList(sid: string): Array<{ id: string; role: string; ord: number }> {
     if (!openCodeDb) return [];
     try {
@@ -1590,7 +1614,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
   // read/write them by name AND system.transform keeps reading the outer `let currentOpenCodeSessionId`.
   // Behavior-zero-change: same objects, same reads/writes, just routed through one param.
   const __transformDeps: any = {
-    getContextUsage, hasNativeUsage: true, compartmentStore, openCodeDb, historian, pendingIdleWork, pluginConfig,
+    getContextUsage, hasNativeUsage: true, getIsMidTurn, getLastUserMessageId, compartmentStore, historian, pendingIdleWork, pluginConfig,
     rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub,
     resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags,
     droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery,

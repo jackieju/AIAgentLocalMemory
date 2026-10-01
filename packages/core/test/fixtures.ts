@@ -195,8 +195,9 @@ export function buildDeps(opts: {
   contextUsagePct?: number;
   compartments?: any[];
   sessionId?: string;
+  compressionStrategy?: string;
 } = {}): BuiltDeps {
-  const { contextUsagePct = 0, compartments = [], sessionId = "test-session" } = opts;
+  const { contextUsagePct = 0, compartments = [], sessionId = "test-session", compressionStrategy } = opts;
   const diagCalls: DiagEvent[] = [];
   const pendingIdleWork = new Map<string, any>();
   const { msgTokenCache, msgTokensMemo } = createTokenMemo();
@@ -213,16 +214,6 @@ export function buildDeps(opts: {
     lastCompressTime: 0,
   };
 
-  // openCodeDb: prepare() → statement whose all/get/run are empty-safe (message-list /
-  // ordinal / finish-reason lookups all no-op → forces the array-based fallbacks).
-  const openCodeDb = {
-    prepare: (_sql: string) => ({
-      all: (..._args: any[]) => [] as any[],
-      get: (..._args: any[]) => undefined,
-      run: (..._args: any[]) => undefined,
-    }),
-  };
-
   // rawStorage.getDb().prepare().run(): no-op KV write (reasoning_watermark persist).
   const rawStorage = {
     getDb: () => ({ prepare: (_sql: string) => ({ run: (..._args: any[]) => {} }) }),
@@ -230,11 +221,14 @@ export function buildDeps(opts: {
 
   const deps = {
     getContextUsage: (_sid: string) => ({ percentage: contextUsagePct }),
+    // Host-overflow / mid-turn / last-user-id callbacks return undefined so core takes its
+    // messages-array heuristics — the host-agnostic path every non-OpenCode embedder uses.
+    getIsMidTurn: (_sid: string) => undefined,
+    getLastUserMessageId: (_sid: string) => undefined,
     compartmentStore: { getForSession: (_sid: string) => compartments },
-    openCodeDb,
     historian: null, // only referenced as `if (!historian)` in this fn → gates historian firing off
     pendingIdleWork,
-    pluginConfig: { systemToolsReservePct: 0.18, protectedTags: 20 },
+    pluginConfig: { systemToolsReservePct: 0.18, protectedTags: 20, ...(compressionStrategy ? { compressionStrategy } : {}) },
     rawStorage,
     storage: {}, // destructured only, never called in this fn
     msgTokensMemo,

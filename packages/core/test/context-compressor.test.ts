@@ -237,4 +237,46 @@ describe("runCompartmentTransform golden snapshots", () => {
 
     expect(afterFirst).toMatchSnapshot();
   });
+
+  test("scenario 7: strategy A — all tool output stripped to 0, no compartments, oldest dropped", async () => {
+    const messages = [];
+    for (let i = 0; i < 30; i++) {
+      if (i % 2 === 0) {
+        messages.push(makeMsg("user", `m${i}`, `question ${i} with some content`, SID, BASE_TIME + i * 1000));
+      } else {
+        messages.push(makeMsg("assistant", `m${i}`, [
+          { type: "text", text: `response ${i}` },
+          { type: "tool", tool: "bash", callID: `toolu_${i}`, state: { status: "completed", input: { command: `cmd ${i}` }, output: "RESULT_BODY_".repeat(50) } },
+        ], SID, BASE_TIME + i * 1000));
+      }
+    }
+    const output: any = { messages };
+    const { deps } = buildDeps({ contextUsagePct: 0, compressionStrategy: "A" });
+
+    await runCompartmentTransform({}, output, deps);
+
+    const out = output.messages;
+
+    // Every surviving tool output must be a retrievable stub (0 kept chars), never raw body.
+    for (const m of out) {
+      for (const p of (m.parts ?? []) as Part[]) {
+        if (p.state && typeof p.state.output === "string" && p.state.output.length > 0) {
+          expect(p.state.output).toContain("kept first 0 of");
+          expect(p.state.output).not.toContain("RESULT_BODY_");
+        }
+      }
+    }
+
+    // A emits no <earlier-topics> compartment summary — the oldest dropped messages leave no trace.
+    const hasEarlierTopics = out.some((m: any) =>
+      (m.parts ?? []).some((p: any) => typeof p.text === "string" && p.text.includes("earlier-topics")),
+    );
+    expect(hasEarlierTopics).toBe(false);
+
+    // Newest real message is preserved verbatim (a trailing boundary sentinel may follow it).
+    const m29 = out.find((m: any) => m.info?.id === "m29");
+    expect(m29).toBeDefined();
+    const m29Text = (m29.parts ?? []).filter((p: Part) => p.type === "text").map((p: Part) => p.text).join("");
+    expect(m29Text).toContain("response 29");
+  });
 });

@@ -36,6 +36,20 @@ export interface TransformDeps {
   /** True when the host has a real usage source (OpenCode = queries its DB). False/omitted → core self-counts. */
   hasNativeUsage?: boolean;
 
+  /**
+   * Host-native "is the previous assistant turn stopped mid tool-call?" lookup.
+   * Returns true/false when the host can tell authoritatively, or undefined when it
+   * cannot — core then falls back to the messages-array heuristic. Keeps core free of
+   * any host DB schema (the SQL that used to query opencode.message lives in the adapter).
+   */
+  getIsMidTurn?: (sid: string) => boolean | undefined;
+  /**
+   * Host-native "id of the latest user message" lookup, used to calibrate protectLine.
+   * Returns the message id or undefined when the host cannot resolve it. Core only uses
+   * the id to index into its own messages array — it never learns the host DB schema.
+   */
+  getLastUserMessageId?: (sid: string) => string | undefined;
+
   storage: any;
   rawStorage: any;
   compartmentStore: any;
@@ -60,7 +74,6 @@ export interface TransformDeps {
   localLlmMode: any;
   autoEscalateAfter: any;
 
-  openCodeDb?: any;
   client?: any;
   dataBase?: any;
   directory?: any;
@@ -248,7 +261,7 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
     // propagate back to the plugin closure (currentOpenCodeSessionId is also read by system.transform).
     // Boundary cast to `any`: the typed TransformDeps contract lives on the signature above; the
     // frozen incident-history body must NOT be re-type-checked, so locals stay effectively `any`.
-    const { getContextUsage, compartmentStore, openCodeDb, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery } = deps as any;
+    const { getContextUsage, compartmentStore, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery, getIsMidTurn, getLastUserMessageId } = deps as any;
     const state = deps.state;
     const emitDiag = (deps.log as ((e: { file: string; text: string; append?: boolean }) => void) | undefined) ?? (() => {});
       try { emitDiag({ file: "/tmp/neural-transform-heartbeat.log", text: `${new Date().toISOString()} msgs=${output.messages?.length ?? 0}\n`, append: true }); } catch {}
@@ -428,21 +441,8 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         }
 
         const isMidTurn = (() => {
-          // Mirror magic-context: derive mid-turn from the latest assistant's finish
-          // reason in OpenCode's DB, not from the transform messages array. The array's
-          // last entry is often the just-arrived user message, which made the old
-          // array-tail check misreport mid-turn as false and mishandle rapid double-sends.
-          if (openCodeDb) {
-            try {
-              const row = openCodeDb.prepare(
-                `SELECT json_extract(data, '$.finish') AS finish
-                 FROM opencode.message
-                 WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
-                 ORDER BY time_created DESC LIMIT 1`
-              ).get(openCodeSessionId) as { finish: string | null } | undefined;
-              if (row && row.finish === "tool-calls") return true;
-            } catch {}
-          }
+          const hostSignal = getIsMidTurn?.(openCodeSessionId);
+          if (hostSignal !== undefined) return hostSignal;
           if (messages.length === 0) return false;
           const last = messages[messages.length - 1];
           return last.info?.role === "assistant" && (last.parts ?? []).some((p: any) => p.type === "tool_call");
@@ -456,6 +456,12 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         }
 
         let compartments = compartmentStore.getForSession(openCodeSessionId);
+
+        // Strategy A is a single chronological tail with NO compartments. If this session
+        // was previously run under B/C/D it may have stored compartments; honouring them
+        // here would push tailStart past messages the A path never re-summarizes, silently
+        // dropping that history from the window. Ignore them entirely so A sees the full array.
+        if (compressionStrategy === "A") compartments = [];
 
         const rendered: Array<any> = [];
 
@@ -506,7 +512,31 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         // reintroduces the "Input too long" under-budgeting bug.
         const MICROCOMPACT_TRIGGER_CHARS = 50000;
         const MICROCOMPACT_STUB_CHARS = 2000;
-        {
+        const stripAllToolOutput = compressionStrategy === "A";
+        if (stripAllToolOutput) {
+          const scanFrom = Math.max(0, messages.length - 500);
+          for (let i = scanFrom; i < messages.length; i++) {
+            let mutated = false;
+            for (const part of (messages[i].parts ?? [])) {
+              const st = (part as any).state;
+              const tname = (part as any).tool;
+              const tinput = st?.input;
+              if (st && typeof st.output === "string" && st.output.length > 0) {
+                st.output = buildToolStub(tname, tinput, openCodeSessionId, 0, st.output.length);
+                mutated = true;
+              }
+              if (typeof (part as any).content === "string" && (part as any).type !== "text" && (part as any).content.length > 0) {
+                (part as any).content = buildToolStub(tname, tinput, openCodeSessionId, 0, (part as any).content.length);
+                mutated = true;
+              }
+            }
+            if (mutated) {
+              const mid = (messages[i] as any)?.info?.id ?? (messages[i] as any)?.id;
+              if (mid) msgTokenCache.delete(mid);
+            }
+          }
+        }
+        if (!stripAllToolOutput) {
           // Only scan the most-recent HARD_TAIL_CAP messages: older ones can never enter the
           // tail (the budget scan floors there too), so stubbing them is wasted O(N·parts) work.
           const microScanFrom = Math.max(0, messages.length - 500);
@@ -594,16 +624,12 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
           }
           // DB fallback: only adopt the hit if it lands inside the protect span, else ignore
           // (never drag startIdx back into already-compressed territory).
-          if (protectLine === messages.length && openCodeDb) {
-            try {
-              const row = openCodeDb.prepare(
-                `SELECT id FROM opencode.message WHERE session_id = ? AND json_extract(data, '$.role') = 'user' ORDER BY time_created DESC LIMIT 1`,
-              ).get(openCodeSessionId) as { id: string } | undefined;
-              if (row?.id && msgIdToIndex.has(row.id)) {
-                const dbIdx = msgIdToIndex.get(row.id) as number;
-                if (dbIdx >= protectFloor) protectLine = dbIdx;   // span-bounded only
-              }
-            } catch {}
+          if (protectLine === messages.length) {
+            const lastUserId = getLastUserMessageId?.(openCodeSessionId);
+            if (lastUserId && msgIdToIndex.has(lastUserId)) {
+              const dbIdx = msgIdToIndex.get(lastUserId) as number;
+              if (dbIdx >= protectFloor) protectLine = dbIdx;
+            }
           }
 
           let tailTokens = 0;
@@ -948,7 +974,7 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
 
         if (rendered.length > 0) {
           const skippedCount = tailActualStart - tailStart;
-          if (skippedCount > 20) {
+          if (skippedCount > 20 && compressionStrategy !== "A") {
             let compartMsgs: any[] = [];
             if ((compressionStrategy === "B" || compressionStrategy === "C" || compressionStrategy === "D") && emitSummaries !== false) {
               const comps = (compartmentStore?.getForSession?.(sessionId) ?? []).filter(
@@ -1162,6 +1188,7 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
 
         const shouldFireHistorian = (() => {
           if (!historian) return false;
+          if (compressionStrategy === "A") return false;
           if (hasUncoveredNewMessages && tailCount > 6) return true;
           if (usagePct >= FORCE_COMPARTMENT_PCT) return true;
           if (tailTokensEstimate >= triggerBudget * TRIGGER_MULTIPLIER) return true;
