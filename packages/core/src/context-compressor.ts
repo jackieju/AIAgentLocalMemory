@@ -883,17 +883,22 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
             const keepFrom = idxs.length - reserveCount;
             for (let k = 0; k < keepFrom; k++) emDropSet.add(idxs[k]);
           }
+          // Keep a short head slice (not 0) so the agent can still tell what the
+          // dropped tool did without re-fetching, matching the microcompact/protected
+          // blocks above. The retrievable stub (tag + tool name + args + transcript
+          // pointer) is still appended for full-fidelity recall.
+          const EM_KEEP_CHARS = 500;
           for (const i of emDropSet) {
             for (const part of (tail[i].parts ?? [])) {
               const st = (part as any).state;
               const tname = (part as any).tool;
-              if (st && typeof st.output === "string" && st.output.length > 0) {
+              if (st && typeof st.output === "string" && st.output.length > EM_KEEP_CHARS) {
                 const orig = st.output.length;
-                st.output = buildToolStub(tname, st.input, openCodeSessionId, 0, orig);
+                st.output = st.output.slice(0, EM_KEEP_CHARS) + buildToolStub(tname, st.input, openCodeSessionId, EM_KEEP_CHARS, orig);
               }
-              if (typeof (part as any).content === "string" && (part as any).content.length > 0) {
+              if (typeof (part as any).content === "string" && (part as any).content.length > EM_KEEP_CHARS) {
                 const orig = (part as any).content.length;
-                (part as any).content = buildToolStub(tname, st?.input, openCodeSessionId, 0, orig);
+                (part as any).content = (part as any).content.slice(0, EM_KEEP_CHARS) + buildToolStub(tname, st?.input, openCodeSessionId, EM_KEEP_CHARS, orig);
               }
             }
           }
