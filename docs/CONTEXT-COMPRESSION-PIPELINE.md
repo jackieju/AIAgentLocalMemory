@@ -214,8 +214,34 @@ making it **physically impossible** for protectLine to land at a tiny index (whi
 
 - **systemToolsReserve** = `contextLimit × 0.18`: reserved for the system prompt + tool definitions,
   otherwise once the conversation fills 55%, system+tools stacked on top overflow.
-- **breakerFactor** (circuit breaker): when the historian fails repeatedly, each failure halves the tail budget
-  (down to a 1/4 floor), so even if compression fails, the request drops below the limit and doesn't 413 over and over.
+- **breakerFactor** (circuit breaker): the tail budget is scaled by `breakerFactor = max(0.25, historianFactor × overflowFactor)` — the product of **two independent circuit breakers**, floored at 1/4 (and the whole budget is additionally floored at `contextLimit × 0.1`). It is strictly MONOTONIC: it can only shrink the payload, never grow it (the #277 blow-up guard).
+  - **historianFactor** = `0.5^min(historianFailureCount, 3)`: when the historian keeps failing, no compartment is produced so the tail can't shrink — each consecutive failure halves the tail budget so the request still drops below the limit.
+  - **overflowFactor** (the 413 context-overflow breaker): shrinks the tail when the *previous* turn actually overflowed the model context (413 / prompt too long). See the dedicated section below.
+
+### 413 context-overflow circuit breaker
+
+A second, host-agnostic breaker reacts to the previous turn **actually overflowing** the model context window (HTTP 413 / "prompt is too long" / `context_length_exceeded`). Where `historianFactor` guards against *compression failing to run*, `overflowFactor` guards against *compression running but still not fitting*.
+
+**Host-agnostic contract.** Core never learns any host error-type name. It takes one neutral callback `deps.getPreviousOverflow(sid)` returning:
+- `{ overflowed: true, tokensUsed?, tokensLimit?, observedOnTurnId? }` — the host saw an overflow. Token figures (when available) let core shrink to a provably-fitting budget; `observedOnTurnId` dedups the same overflow seen across two transform passes of one turn.
+- `{ overflowed: false }` — the host **authoritatively** saw the turn succeed. This is the **only** signal that resets the breaker.
+- `undefined` — the host can't tell; core falls back to a usage-hugging heuristic. A host MUST return `undefined` (not `overflowed:false`) when it genuinely cannot observe the outcome, or the breaker would reset on a false "success".
+
+**Streak counter** (`state.overflow = { streak, lastTurnId, circuitOpen }`):
+- A fresh distinct overflow bumps `streak` (capped at **3**); the same `observedOnTurnId` is counted once (dedup).
+- An authoritative `overflowed:false` resets `streak` to 0 (hard reset — no cooldown).
+- Heuristic fallback: when the host returns `undefined` but `lastContextPercentage ≥ 92`, the streak is nudged **but capped at N-1 = 2** — the heuristic alone can never open the circuit; only a real overflow fact can.
+- `circuitOpen = streak ≥ 3`.
+
+**Shrink math** (`overflowFactor`, only when `streak > 0`):
+- With token figures: `min(0.5^streak, (tokensLimit / tokensUsed) × 0.85)` — the smaller of geometric halving and "shrink to the real overflow ratio, keeping a 15% safety margin".
+- Without token figures: `0.5^min(streak, 3)` — pure geometric halving.
+
+**OpenCode adapter fact signal** (`adapter-opencode`): `getPreviousOverflow` reads the last assistant message in `opencode.db` and matches `error.name === "ContextOverflowError"` (OpenCode's normalized 413 name across every provider — the one and only host-specific token in the whole breaker), parsing `tokensUsed`/`tokensLimit` from the `responseBody`. **It returns `undefined` whenever `compaction.auto !== false`**, because OpenCode then swallows the overflow into its own compaction and leaves no error message — reporting `false` there would be a false reset that disarms the breaker. So the fact signal is only authoritative with `compaction.auto: false` in `opencode.jsonc`.
+
+**Not (yet) implemented** — two Oracle design points deliberately left out:
+- *Open-circuit one-shot notice*: when the circuit opens, core only shrinks the budget; `circuitOpen` is never read to **inject a message** into the rendered output. Injecting into `messages[]` means touching the render hot path (the #277 risk), so it's intentionally skipped.
+- *Hysteresis / cooldown on reset* (Oracle marked optional): reset is a hard reset; there is no one-turn cooldown buffer after recovery.
 
 **N=1 guarantee** (Task 3): if the newest single message already exceeds budget, the budget loop's first-pass break
 leaves startIdx at `length`, falling into slice(-1). Here we force the newest message into the tail — the newest message is never lost.

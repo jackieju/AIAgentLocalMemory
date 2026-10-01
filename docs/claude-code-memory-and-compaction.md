@@ -107,10 +107,9 @@ Claude Code 故意**不使用 RAG / embedding / 向量库**，改用 grep。这�
 
 ## 5. 尚未做 / 有架构约束
 
-- **L2 精确版 + L4 精确版（需看到真实 413）** 需要 fork opencode 加 `chat.request.transform` hook，
-  因为 `messages.transform` 跑在请求组装**之前**，看不到 system prompt / tools / 413 错误。
-- fork PR **#35613**（`jackieju/opencode`，branch `replay-shortcircuit`）被 bot 自动关闭未合并，
-  所以当前插件里是**纯插件近似版**（预留 headroom + 失败计数水位线），fork 精确版留作可选增强。
+- **L4 的 413 精确版 —— 已纯插件实现（无需 fork）。** 原先以为"看到真实 413 必须 fork opencode 加 `chat.request.transform` hook"，实际证伪：adapter 的 `getPreviousOverflow` 直接从 `opencode.db` 读上一条 assistant 消息的 `error.name === "ContextOverflowError"`（OpenCode 对 413 的归一化名）就能拿到真实溢出事实信号，并解析其 `tokensUsed`/`tokensLimit`，不用 fork。前提：`opencode.jsonc` 设 `compaction.auto: false`（否则 OpenCode 自己吞掉溢出）。详见 `CONTEXT-COMPRESSION-PIPELINE.md` 的「413 context-overflow circuit breaker」节。
+- **L2 精确版**（在请求组装后、看到 system prompt + tools 实际 token 再裁）仍需 fork opencode 加 `chat.request.transform` hook，因为 `messages.transform` 跑在请求组装**之前**。fork PR **#35613**（`jackieju/opencode`，branch `replay-shortcircuit`）被 bot 自动关闭未合并，故 L2 当前仍是**纯插件近似版**（预留 headroom）。
+- **413 断路器两个 Oracle 设计点刻意未做**：(a) 开路后往消息注入一次性提示（会动渲染热路径，#277 风险）；(b) 复位后 hysteresis 冷却一轮（Oracle 标 optional）。当前断路器只收缩 tail 预算、硬复位。
 
 ---
 
@@ -128,6 +127,7 @@ Claude Code 故意**不使用 RAG / embedding / 向量库**，改用 grep。这�
 | L2 | `systemToolsReservePct ?? 0.18` | ✅ 3 |
 | L4 | `breakerFactor = Math.max(0.25, Math.pow(0.5, …))` | ✅ 2 |
 | L4 | `historianFailureCount` | ✅ 7 |
+| L4 (413) | `getPreviousOverflow` / `state.overflow` / `ContextOverflowError` | ✅ core 契约+adapter 事实信号+scenario 8 测试 |
 | 崩溃修复 | `originalMessagesSnapshot` / `RENDERED_SENTINEL` | ✅ 2 / 3 |
 
 部署 bundle 报告 `SERVER_BUILD = "250"`（对应 commit `ed9ea5e` 及之后的本地重建）。

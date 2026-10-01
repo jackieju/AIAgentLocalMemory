@@ -208,8 +208,34 @@ messages.transform(output)
 
 - **systemToolsReserve** = `contextLimit × 0.18`：给 system prompt + 工具定义预留，
   否则对话吃满 55% 后，system+tools 一叠加就溢出。
-- **breakerFactor**（熔断器）：historian 连续失败时，每次失败把 tail 预算减半（降到 1/4 floor），
-  保证即使压缩失败，请求也能降到限额以下，不会反复 413。
+- **breakerFactor**（熔断器）：tail 预算会乘以 `breakerFactor = max(0.25, historianFactor × overflowFactor)` —— 这是**两个独立熔断器**的乘积，地板 1/4（整个预算另有 `contextLimit × 0.1` 的地板）。它严格**单调**：只能缩小 payload，永不增大（#277 爆炸的防护）。
+  - **historianFactor** = `0.5^min(historianFailureCount, 3)`：historian 连续失败时产不出 compartment，tail 无法收缩 —— 每次失败把 tail 预算减半，保证请求仍降到限额以下。
+  - **overflowFactor**（413 上下文溢出熔断器）：当**上一轮**真的溢出了模型上下文（413 / prompt too long）时收缩 tail。详见下节。
+
+### 413 上下文溢出熔断器
+
+第二个熔断器是**宿主无关**的，针对上一轮**真的溢出**模型上下文窗口（HTTP 413 /「prompt is too long」/ `context_length_exceeded`）。`historianFactor` 防的是*压缩没跑起来*，`overflowFactor` 防的是*压缩跑了但还是放不下*。
+
+**宿主无关契约。** core 不认任何宿主的错误类型名，只接一个中性回调 `deps.getPreviousOverflow(sid)`，返回：
+- `{ overflowed: true, tokensUsed?, tokensLimit?, observedOnTurnId? }` —— 宿主看到了溢出。有 token 数时能让 core 收缩到可证明放得下的预算；`observedOnTurnId` 用于在同一 turn 的两次 transform pass 之间去重。
+- `{ overflowed: false }` —— 宿主**权威地**看到该轮成功。这是**唯一**能重置熔断器的信号。
+- `undefined` —— 宿主无法判断；core 回退到贴顶使用率的启发式。宿主在**真的无法观测结果**时**必须返回 undefined 而非 overflowed:false**，否则熔断器会在假「成功」上被错误重置。
+
+**连爆计数器**（`state.overflow = { streak, lastTurnId, circuitOpen }`）：
+- 一次全新的、不同的溢出使 `streak` 自增（封顶 **3**）；相同 `observedOnTurnId` 只计一次（去重）。
+- 权威的 `overflowed:false` 把 `streak` 重置为 0（硬复位 —— 无冷却）。
+- 启发式兜底：宿主返回 `undefined` 但 `lastContextPercentage ≥ 92` 时，streak 自增**但封顶 N-1 = 2** —— 单靠启发式永远打不开断路器；只有真实溢出事实才能打开。
+- `circuitOpen = streak ≥ 3`。
+
+**收缩数学**（`overflowFactor`，仅当 `streak > 0`）：
+- 有 token 数：`min(0.5^streak, (tokensLimit / tokensUsed) × 0.85)` —— 取「几何减半」与「按真实溢出比例收缩、留 15% 安全余量」两者的较小值。
+- 无 token 数：`0.5^min(streak, 3)` —— 纯几何减半。
+
+**OpenCode adapter 事实信号**（`adapter-opencode`）：`getPreviousOverflow` 读 `opencode.db` 里最新一条 assistant 消息，匹配 `error.name === "ContextOverflowError"`（OpenCode 跨所有 provider 对 413 的归一化名 —— 这是整个熔断器里**唯一**的宿主专属字符串），从 `responseBody` 正则解析 `tokensUsed`/`tokensLimit`。**只要 `compaction.auto !== false` 它就返回 `undefined`**，因为那时 OpenCode 把溢出吞进自己的 compaction、不留 error message —— 在那种情况下返回 `false` 会造成假复位、使熔断器失效。所以事实信号只在 `opencode.jsonc` 设 `compaction.auto: false` 时才权威。
+
+**尚未实现** —— 两个 Oracle 设计点刻意没做：
+- *开路后一次性提示注入*：断路器开路时 core 只收缩预算；`circuitOpen` 从不被读来**往渲染结果注入一条消息**。往 `messages[]` 注入意味着动渲染热路径（#277 风险），故刻意跳过。
+- *复位后 hysteresis / 冷却一轮*（Oracle 标 optional）：复位是硬复位，恢复后没有一轮冷却缓冲。
 
 **N=1 保证**（任务3）：若最新单条消息已超预算，budget loop 首轮 break 会把 startIdx 停在 `length`，
 掉进 slice(-1)。这里强制把最新一条纳入 tail —— 最新消息永不丢。
