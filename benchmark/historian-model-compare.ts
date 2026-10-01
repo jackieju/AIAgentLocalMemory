@@ -73,11 +73,37 @@ function buildHistorianTranscript(window: Msg[]): string {
   return window.map(m => `[${m.role}]: ${m.content.slice(0, 1000)}`).join("\n\n");
 }
 
-async function summarize(llm: any, model: string | undefined, transcript: string): Promise<string> {
-  const prompt = `${HISTORIAN_PROMPT}\n\nCONVERSATION:\n${transcript}\n\nJSON:`;
+// Call the big model via Anthropic's native /messages API (hai proxy's claude models
+// reject the OpenAI /chat/completions subpath, so OpenAICompatibleLLM can't reach them).
+async function anthropicComplete(baseUrl: string, apiKey: string, model: string, prompt: string): Promise<string> {
+  const url = `${baseUrl.replace(/\/$/, "")}/messages`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({ model, max_tokens: 400, messages: [{ role: "user", content: prompt }] }),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+  const data: any = await res.json();
+  return (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+}
+
+async function summarize(kind: "local" | "big", cfg: any, transcript: string): Promise<string> {
+  // qwen3 is a reasoning model: without /no_think it dumps everything into reasoning_content
+  // and leaves `content` empty. Historian needs clean JSON, so the local path forces thinking off.
+  const basePrompt = `${HISTORIAN_PROMPT}\n\nCONVERSATION:\n${transcript}\n\nJSON:`;
+  const prompt = kind === "local" ? `/no_think ${basePrompt}` : basePrompt;
   const t0 = Date.now();
   try {
-    const r = await llm.complete(prompt, { model, maxTokens: 300 });
+    let r: string | null;
+    if (kind === "big" && cfg.anthropic) {
+      r = await anthropicComplete(cfg.baseUrl, cfg.apiKey, cfg.model, prompt);
+    } else {
+      r = await cfg.llm.complete(prompt, { model: cfg.model, maxTokens: 400 });
+    }
     return `(${Date.now() - t0}ms)\n${(r ?? "").trim()}`;
   } catch (e: any) {
     return `ERROR: ${e?.message ?? e}`;
@@ -97,14 +123,17 @@ async function main() {
   const bigModel = process.env.BIG_MODEL || "claude-opus-4-8";
 
   const local = new OllamaLLM({ baseUrl: ollamaUrl, model: ollamaModel });
-  const big = bigUrl ? new OpenAICompatibleLLM({ baseUrl: bigUrl, apiKey: bigKey, model: bigModel }) : null;
+  const localCfg = { kind: "local" as const, llm: local, model: undefined };
+  const bigAnthropic = !!bigUrl && /anthropic/.test(bigUrl);
+  const big = bigUrl && !bigAnthropic ? new OpenAICompatibleLLM({ baseUrl: bigUrl, apiKey: bigKey, model: bigModel }) : null;
+  const bigCfg = bigUrl ? { kind: "big" as const, anthropic: bigAnthropic, baseUrl: bigUrl, apiKey: bigKey, model: bigModel, llm: big } : null;
 
   const md = readFileSync(transcriptPath, "utf8");
   const msgs = parseTranscript(md);
   console.log(`transcript: ${transcriptPath}`);
   console.log(`parsed ${msgs.length} messages; comparing ${chunks} chunks of ${windowSize} msgs each`);
   console.log(`LOCAL: ollama ${ollamaModel} @ ${ollamaUrl}`);
-  console.log(`BIG:   ${big ? `${bigModel} @ ${bigUrl}` : "(not configured — set BIG_URL/BIG_KEY to compare)"}`);
+  console.log(`BIG:   ${bigCfg ? `${bigModel} @ ${bigUrl}${bigAnthropic ? " (anthropic native)" : ""}` : "(not configured — set BIG_URL/BIG_KEY to compare)"}`);
   console.log("=".repeat(80));
 
   // Sample chunks evenly across the whole history (oldest→newest) so we test the
@@ -120,11 +149,11 @@ async function main() {
     console.log(`--- input preview (first 200 chars) ---`);
     console.log(transcript.slice(0, 200) + "…");
 
-    const localOut = await summarize(local, undefined, transcript);
+    const localOut = await summarize("local", localCfg, transcript);
     console.log(`\n--- LOCAL ${ollamaModel} ---\n${localOut}`);
 
-    if (big) {
-      const bigOut = await summarize(big, bigModel, transcript);
+    if (bigCfg) {
+      const bigOut = await summarize("big", bigCfg, transcript);
       console.log(`\n--- BIG ${bigModel} ---\n${bigOut}`);
     }
     console.log("\n" + "-".repeat(80));
