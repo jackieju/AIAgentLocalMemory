@@ -403,6 +403,38 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
     } catch { return undefined; }
   }
 
+  function getPreviousOverflow(sid: string): { overflowed: boolean; tokensUsed?: number; tokensLimit?: number; observedOnTurnId?: string } | undefined {
+    // The breaker's fact signal only works when OpenCode leaves overflow in the session.
+    // With compaction.auto !== false OpenCode swallows 413 into its own compaction and no
+    // error message appears — reporting overflowed:false here would be a FALSE reset, so we
+    // return undefined (core falls back to its heuristic). We only speak when auto === false.
+    const compactionAuto = (globalThis as any).__neuralCompactionAuto;
+    if (compactionAuto !== false) return undefined;
+    if (!openCodeDb) return undefined;
+    try {
+      const row = openCodeDb.prepare(
+        `SELECT id, json_extract(data, '$.error.name') AS ename, json_extract(data, '$.error.data.responseBody') AS body
+         FROM opencode.message
+         WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant'
+         ORDER BY time_created DESC LIMIT 1`,
+      ).get(sid) as { id: string; ename: string | null; body: string | null } | undefined;
+      if (!row) return undefined;
+      // ContextOverflowError is OpenCode's normalized name for 413 / prompt-too-long /
+      // context_length_exceeded across every provider — the ONLY host-specific token here.
+      if (row.ename === "ContextOverflowError") {
+        let tokensUsed: number | undefined, tokensLimit: number | undefined;
+        if (row.body) {
+          const mu = row.body.match(/(\d[\d,]{3,})\s*tokens/i);
+          const ml = row.body.match(/>\s*(\d[\d,]{3,})/);
+          if (mu) tokensUsed = parseInt(mu[1].replace(/,/g, ""), 10);
+          if (ml) tokensLimit = parseInt(ml[1].replace(/,/g, ""), 10);
+        }
+        return { overflowed: true, tokensUsed, tokensLimit, observedOnTurnId: row.id };
+      }
+      return { overflowed: false };   // authoritative success → core resets the breaker
+    } catch { return undefined; }
+  }
+
   function getSessionMessageList(sid: string): Array<{ id: string; role: string; ord: number }> {
     if (!openCodeDb) return [];
     try {
@@ -1614,7 +1646,7 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
   // read/write them by name AND system.transform keeps reading the outer `let currentOpenCodeSessionId`.
   // Behavior-zero-change: same objects, same reads/writes, just routed through one param.
   const __transformDeps: any = {
-    getContextUsage, hasNativeUsage: true, getIsMidTurn, getLastUserMessageId, compartmentStore, historian, pendingIdleWork, pluginConfig,
+    getContextUsage, hasNativeUsage: true, getIsMidTurn, getLastUserMessageId, getPreviousOverflow, compartmentStore, historian, pendingIdleWork, pluginConfig,
     rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub,
     resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags,
     droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery,
@@ -1679,6 +1711,9 @@ Your response MUST be structured EXACTLY as follows, with these exact section he
         };
         config.agent = agentCfg;
       }
+      // Expose compaction.auto so the 413-breaker's getPreviousOverflow knows whether
+      // OpenCode leaves overflow in the session (auto===false) or swallows it (auto!==false).
+      (globalThis as any).__neuralCompactionAuto = config.compaction?.auto;
     },
 
     "chat.message": async (input: any, output: any) => {

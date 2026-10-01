@@ -279,4 +279,47 @@ describe("runCompartmentTransform golden snapshots", () => {
     const m29Text = (m29.parts ?? []).filter((p: Part) => p.type === "text").map((p: Part) => p.text).join("");
     expect(m29Text).toContain("response 29");
   });
+
+  test("scenario 8: 413 circuit breaker — overflow shrinks, success resets, never grows", async () => {
+    const mkMsgs = () => {
+      const out = [];
+      for (let i = 0; i < 20; i++) out.push(makeMsg(i % 2 === 0 ? "user" : "assistant", `m${i}`, `turn ${i} content here`, SID, BASE_TIME + i * 1000));
+      return out;
+    };
+
+    // Host reports the previous turn overflowed with token figures → breaker shrinks the tail.
+    const d1 = buildDeps({ previousOverflow: { overflowed: true, tokensUsed: 300000, tokensLimit: 200000, observedOnTurnId: "t1" } });
+    await runCompartmentTransform({}, { messages: mkMsgs() }, d1.deps);
+    expect(d1.state.overflow.streak).toBe(1);
+    expect(d1.state.overflow.circuitOpen).toBe(false);
+
+    // Dedup: the SAME overflow turn seen again must not double-count the streak.
+    const d1b = buildDeps({ previousOverflow: { overflowed: true, observedOnTurnId: "t1" } });
+    d1b.state.overflow = { streak: 1, lastTurnId: "t1", circuitOpen: false };
+    await runCompartmentTransform({}, { messages: mkMsgs() }, d1b.deps);
+    expect(d1b.state.overflow.streak).toBe(1); // unchanged — same turn id
+
+    // Three distinct overflows open the circuit (streak caps at 3).
+    const d2 = buildDeps({ previousOverflow: { overflowed: true, observedOnTurnId: "t4" } });
+    d2.state.overflow = { streak: 2, lastTurnId: "t3", circuitOpen: false };
+    await runCompartmentTransform({}, { messages: mkMsgs() }, d2.deps);
+    expect(d2.state.overflow.streak).toBe(3);
+    expect(d2.state.overflow.circuitOpen).toBe(true);
+
+    // An authoritative success (overflowed:false) is the ONLY thing that resets the breaker.
+    const d3 = buildDeps({ previousOverflow: { overflowed: false } });
+    d3.state.overflow = { streak: 3, lastTurnId: "t4", circuitOpen: true };
+    await runCompartmentTransform({}, { messages: mkMsgs() }, d3.deps);
+    expect(d3.state.overflow.streak).toBe(0);
+    expect(d3.state.overflow.circuitOpen).toBe(false);
+
+    // Monotonic safety: an overflowing turn's rendered payload must never EXCEED a non-overflow
+    // turn's payload (the breaker can only shrink). Compare total rendered text length.
+    const totalLen = (o: any) => o.messages.reduce((s: number, m: any) => s + (m.parts ?? []).reduce((t: number, p: any) => t + (typeof p.text === "string" ? p.text.length : 0), 0), 0);
+    const normalOut: any = { messages: mkMsgs() };
+    await runCompartmentTransform({}, normalOut, buildDeps({}).deps);
+    const overflowOut: any = { messages: mkMsgs() };
+    await runCompartmentTransform({}, overflowOut, buildDeps({ previousOverflow: { overflowed: true, observedOnTurnId: "tX" } }).deps);
+    expect(totalLen(overflowOut)).toBeLessThanOrEqual(totalLen(normalOut));
+  });
 });

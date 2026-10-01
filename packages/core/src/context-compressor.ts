@@ -49,6 +49,19 @@ export interface TransformDeps {
    * the id to index into its own messages array — it never learns the host DB schema.
    */
   getLastUserMessageId?: (sid: string) => string | undefined;
+  /**
+   * Host-native "did the PREVIOUS turn overflow the model context (413 / prompt too long)?"
+   * Neutral contract — core never learns any host error-type name. Returns:
+   *   { overflowed: true, tokensUsed?, tokensLimit?, observedOnTurnId? } when the host saw an
+   *     overflow (token figures let core shrink to a provably-fitting budget; observedOnTurnId
+   *     dedups the same overflow seen across two transform passes of one turn),
+   *   { overflowed: false } ONLY when the host authoritatively saw the turn succeed (this is the
+   *     sole reset signal), or
+   *   undefined when the host cannot tell — core then uses its usage-hugging heuristic fallback.
+   * A host MUST return undefined (not overflowed:false) when it genuinely cannot observe the
+   * outcome, otherwise the breaker would reset on a false "success".
+   */
+  getPreviousOverflow?: (sid: string) => { overflowed: boolean; tokensUsed?: number; tokensLimit?: number; observedOnTurnId?: string } | undefined;
 
   storage: any;
   rawStorage: any;
@@ -261,7 +274,7 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
     // propagate back to the plugin closure (currentOpenCodeSessionId is also read by system.transform).
     // Boundary cast to `any`: the typed TransformDeps contract lives on the signature above; the
     // frozen incident-history body must NOT be re-type-checked, so locals stay effectively `any`.
-    const { getContextUsage, compartmentStore, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery, getIsMidTurn, getLastUserMessageId } = deps as any;
+    const { getContextUsage, compartmentStore, historian, pendingIdleWork, pluginConfig, rawStorage, storage, msgTokensMemo, msgTokenCache, countClaudeTokens, buildToolStub, resolveToolTier, setActiveTokenizerModel, resolveContextWindow, toEpochMs, pinnedTags, droppedTags, sessionId, dataBase, client, localLlmMode, autoEscalateAfter, directory, embedQuery, getIsMidTurn, getLastUserMessageId, getPreviousOverflow } = deps as any;
     const state = deps.state;
     const emitDiag = (deps.log as ((e: { file: string; text: string; append?: boolean }) => void) | undefined) ?? (() => {});
       try { emitDiag({ file: "/tmp/neural-transform-heartbeat.log", text: `${new Date().toISOString()} msgs=${output.messages?.length ?? 0}\n`, append: true }); } catch {}
@@ -494,11 +507,43 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         // system+tools overflow the assembled request ("Input too long" mid-turn).
         const SYSTEM_TOOLS_RESERVE_PCT = pluginConfig.systemToolsReservePct ?? 0.18;
         const systemToolsReserveTokens = Math.round(contextLimit * SYSTEM_TOOLS_RESERVE_PCT);
+
+        // 413 circuit breaker (host-agnostic). The previous turn may have overflowed the model
+        // context. The host fact signal (getPreviousOverflow) is authoritative; a usage-hugging
+        // heuristic covers hosts that cannot report. We fold a shrink factor into breakerFactor
+        // below — multiplicative, floored, MONOTONIC: it can only shrink the payload, never grow
+        // it (the #277 blowup lesson). Streak caps at 3 so geometric shrink bottoms out.
+        if (!state.overflow) state.overflow = { streak: 0, lastTurnId: "", circuitOpen: false };
+        const ov = state.overflow;
+        const prevOverflow = getPreviousOverflow?.(openCodeSessionId);
+        let overflowTokensUsed = 0, overflowTokensLimit = 0;
+        if (prevOverflow && prevOverflow.overflowed) {
+          const turnId = prevOverflow.observedOnTurnId ?? "";
+          if (!turnId || turnId !== ov.lastTurnId) {   // dedup: one overflow counted once
+            ov.streak = Math.min(ov.streak + 1, 3);
+            ov.lastTurnId = turnId;
+          }
+          overflowTokensUsed = prevOverflow.tokensUsed ?? 0;
+          overflowTokensLimit = prevOverflow.tokensLimit ?? 0;
+        } else if (prevOverflow && prevOverflow.overflowed === false) {
+          ov.streak = 0; ov.lastTurnId = "";           // explicit success is the ONLY reset
+        } else if (state.lastContextPercentage >= 92) {
+          ov.streak = Math.max(ov.streak, Math.min(ov.streak + 1, 2)); // heuristic: cap at N-1
+        }
+        ov.circuitOpen = ov.streak >= 3;
+        let overflowFactor = 1.0;
+        if (ov.streak > 0) {
+          overflowFactor = (overflowTokensUsed > 0 && overflowTokensLimit > 0)
+            ? Math.min(Math.pow(0.5, ov.streak), (overflowTokensLimit / overflowTokensUsed) * 0.85)
+            : Math.pow(0.5, Math.min(ov.streak, 3));
+        }
+
         // L4 circuit breaker: when the historian keeps failing (413/timeout), no
         // compartment is produced so the tail cannot shrink and the next request
         // 413s again. Each consecutive failure halves the tail budget (down to a
         // floor) so the wire request drops below the limit even without compaction.
-        const breakerFactor = Math.max(0.25, Math.pow(0.5, Math.min(state.historianFailureCount, 3)));
+        const historianFactor = Math.pow(0.5, Math.min(state.historianFailureCount, 3));
+        const breakerFactor = Math.max(0.25, historianFactor * overflowFactor);
         const strategyHooks = STRATEGIES[compressionStrategy] ?? STRATEGIES.B;
         const tailPolicy = strategyHooks.resolveTailPolicy({
           contextLimit, targetUsagePct: TARGET_USAGE_PCT, systemToolsReserveTokens,

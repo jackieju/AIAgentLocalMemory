@@ -196,8 +196,9 @@ export function buildDeps(opts: {
   compartments?: any[];
   sessionId?: string;
   compressionStrategy?: string;
+  previousOverflow?: { overflowed: boolean; tokensUsed?: number; tokensLimit?: number; observedOnTurnId?: string };
 } = {}): BuiltDeps {
-  const { contextUsagePct = 0, compartments = [], sessionId = "test-session", compressionStrategy } = opts;
+  const { contextUsagePct = 0, compartments = [], sessionId = "test-session", compressionStrategy, previousOverflow } = opts;
   const diagCalls: DiagEvent[] = [];
   const pendingIdleWork = new Map<string, any>();
   const { msgTokenCache, msgTokensMemo } = createTokenMemo();
@@ -225,6 +226,7 @@ export function buildDeps(opts: {
     // messages-array heuristics — the host-agnostic path every non-OpenCode embedder uses.
     getIsMidTurn: (_sid: string) => undefined,
     getLastUserMessageId: (_sid: string) => undefined,
+    getPreviousOverflow: (_sid: string) => previousOverflow,
     compartmentStore: { getForSession: (_sid: string) => compartments },
     historian: null, // only referenced as `if (!historian)` in this fn → gates historian firing off
     pendingIdleWork,
