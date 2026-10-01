@@ -1,0 +1,74 @@
+site_name: AI Agent Local Memory
+site_description: Neural associative memory + context-compression engine for AI agents
+site_url: https://jackieju.github.io/AIAgentLocalMemory/
+repo_url: https://github.com/jackieju/AIAgentLocalMemory
+repo_name: jackieju/AIAgentLocalMemory
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+plugins:
+  - search:
+      lang:
+        - en
+        - zh
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: readme_simple.md
+  - Guides (English):
+      - Context Compression Pipeline: CONTEXT-COMPRESSION-PIPELINE.md
+      - Compression Strategies (A/B/C/D): COMPRESSION-STRATEGIES.md
+      - Fidelity Rendering (F0–F4): FIDELITY-RENDERING-F0-F4.md
+      - Configuration Reference: CONFIGURATION-REFERENCE.md
+      - Writing an Adapter: WRITING-ADAPTERS.md
+      - Working with a Local LLM: case-of-working-with-local-llm.md
+  - Design & Vision:
+      - Architecture & Safety Whitepaper: "ARCHITECTURE‑SAFETY‑WHITEPAPER.md"
+      - Commonsense Foundation Spec: "COMMONSENSE‑FOUNDATION‑SPEC.md"
+      - Vision — a Growing Agent: vision-growing-agent.md
+      - "Claude Code: Memory & Compaction": claude-code-memory-and-compaction.md
+  - 中文指南:
+      - 上下文压缩流水线: CONTEXT-COMPRESSION-PIPELINE_CN.md
+      - 压缩策略 (A/B/C/D): COMPRESSION-STRATEGIES_CN.md
+      - 精度渲染 (F0–F4): FIDELITY-RENDERING-F0-F4_CN.md
+      - 配置参考: CONFIGURATION-REFERENCE_CN.md
+      - 编写适配器: WRITING-ADAPTERS_CN.md
