@@ -1126,6 +1126,7 @@ Further reading in [`docs/`](./docs):
 - [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — how the agent grows commonsense and ethics as its safety layer.
 - [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — system architecture and the safety model.
 - [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — a walkthrough of the Observer / Student / Primary local-LLM modes.
+- [Writing an Adapter](./docs/WRITING-ADAPTERS.md) ([中文](./docs/WRITING-ADAPTERS_CN.md)) — build on `core` for any agent host: the three contracts, six host hooks, and a minimal wiring skeleton.
 
 ## License
 

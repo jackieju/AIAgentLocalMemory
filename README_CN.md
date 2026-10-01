@@ -215,6 +215,89 @@
 | `@ai-agent-local-memory/adapter-opencode` | OpenCode 插件适配器（完整上下文管理） |
 | `@ai-agent-local-memory/adapter-openclaw` | OpenClaw 插件适配器（ContextEngine + 记忆插槽） |
 
+## 使用本项目的几种方式
+
+有四种方式使用本项目，从开箱即用的插件到裸库皆可。按你的宿主挑一种。
+
+### 1. OpenCode 插件（开箱即用，功能最全）
+
+最丰富的集成。完整的 magic-context 风格自动上下文压缩（historian + compartments）、成长层（dreamer / 观察者-学生-主力 本地 LLM）、TUI 侧边栏、全部 `neural_*` 工具、跨机器同步、会话抄本 —— 全部接到 OpenCode 的插件钩子上。
+
+- 安装：见 [OpenCode 插件 → 安装](#opencode-插件)。
+- 适合：任何跑 OpenCode、想要零胶水代码拿到全部功能的人。
+
+### 2. OpenClaw 插件
+
+同一套神经记忆 core，接到 OpenClaw 的 ContextEngine + 记忆插槽上。默认与 OpenCode 插件共享**完全相同的记忆图**（见[在多个宿主之间共享记忆](#在多个宿主之间共享记忆)）。
+
+- 安装：见 [OpenClaw 插件 → 安装](#openclaw-插件)。
+- 适合：想把记忆 core 装进现有 OpenClaw 环境的用户。
+
+### 3. `nvp-server` —— JSON-RPC 子进程（任意 agent、任意语言）
+
+一个独立编译的二进制（`packages/server/dist/nvp-server`），通过 **stdin/stdout 上的 JSON-RPC 2.0** 通信（每行一个 JSON 对象，`\n` 分帧）。它只依赖 `core` + `storage-sqlite`——**零 OpenCode/OpenClaw 依赖**。任何能 spawn 子进程、读写管道的 agent 都能用（AI Voice Agent 就是从 Swift 这样集成它的）。
+
+构建：
+```bash
+cd packages/server
+bun run build          # 产出 dist/nvp-server
+```
+
+每个请求在 `params` 里带 `dbPath` + `projectId`（server 对每个 `dbPath::projectId` 保持一个引擎实例）。支持的方法：
+
+| 方法 | 用途 |
+|---|---|
+| `ping` | 健康检查 → `{ ok, pid }` |
+| `ingest` | 喂一轮对话：`params.session = { id, messages: [{role, content, timestamp}] }`（fire-and-forget） |
+| `recall` | 关联回忆：`params = { query, maxResults?, maxHops?, threshold?, readOnly? }` |
+| `remember` | 存一个节点：`params = { content, type?, importance?, metadata? }` |
+| `renderContext` | 返回压缩后的历史（精度分级）：`params = { sessionId, contextWindowTokens?, budgetRatio?, recentFullTextTurns?, seeds? }` |
+| `getStats` | 引擎 + 工作记忆统计 |
+| `shutdown` | 优雅停止 |
+
+最小示例（喂一轮，再取回压缩后的历史）：
+```jsonc
+// → stdin
+{"jsonrpc":"2.0","id":1,"method":"ingest","params":{"dbPath":"/path/graph.db","projectId":"default","session":{"id":"sess-1","messages":[{"role":"user","content":"hi","timestamp":1700000000000}]}}}
+{"jsonrpc":"2.0","id":2,"method":"renderContext","params":{"dbPath":"/path/graph.db","projectId":"default","sessionId":"sess-1","contextWindowTokens":200000}}
+// ← stdout
+{"jsonrpc":"2.0","id":2,"result":{"messages":[{"role":"...","content":"..."}]}}
+```
+
+- 适合：任何语言写的自定义 agent（语音、CLI、Web、其他编辑器），想要记忆 + 上下文渲染却不想写适配器。
+- 注意：`nvp-server` 目前走的是精度分级的 `ContextRenderer`。magic-context 风格的 compartment 压缩目前住在 OpenCode 适配器里。
+
+### 4. 直接用源码库（`core` + `storage-sqlite`）
+
+把引擎直接 import 进你自己的 TypeScript/JavaScript 进程——无子进程、无 RPC。这正是所有适配器和 `nvp-server` 底层的做法。
+
+```ts
+import { NeuralContextEngine } from "@ai-agent-local-memory/core";
+import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+
+const storage = new SqliteStorageProvider({ storagePath: "/path/graph.db" });
+const engine = new NeuralContextEngine();
+await engine.init({ storage, projectId: "default", workingMemorySize: 1000, maxEdgesPerNode: 8 });
+
+await engine.remember("The API base URL is localhost:6655", "fact");
+const hits = await engine.recall("what is the api url", { maxResults: 5 });
+```
+
+`core` 还导出其他构件（自行组装流水线）：`NeuralGraph`、`WorkingMemory`、`Historian`、`ContextRenderer`、`Compactor`、`Deduplicator`、`CrossSessionLinker`、`LightweightLinker`、`LLMExtractor`、`EmbeddingLinker`、`HierarchicalGraph`、`OperationLog`、`LoggedStorageProvider`、`EdgeWeightPredictor`，以及 `./providers` 下的 LLM/embedding provider。
+
+- 存储同时跑在 Bun（`bun:sqlite`）和 Node.js（`node:sqlite`）上——见[跨运行时兼容性](#跨运行时兼容性)。
+- 适合：把记忆引擎嵌进你自己的服务，或构建一个新的宿主适配器。
+- 要为一个新宿主写适配器？见[编写适配器指南](./docs/WRITING-ADAPTERS_CN.md)（[English](./docs/WRITING-ADAPTERS.md)）——讲清三个契约、六个宿主钩子、以及最小接线骨架。
+
+### 一览
+
+| 方式 | 运行时耦合 | 上下文压缩 | 成长层 | 工作量 |
+|---|---|---|---|---|
+| OpenCode 插件 | 仅 OpenCode | compartment（magic-context 风格） | ✅ 完整 | 无 |
+| OpenClaw 插件 | 仅 OpenClaw | ContextEngine | 部分 | 无 |
+| `nvp-server`（JSON-RPC） | **任意**（子进程） | 精度分级（`renderContext`） | 经由 `remember`/`recall` | spawn + 管道 |
+| 源码库 | **任意**（进程内） | 你自行组装 | 你自行组装 | 自己写胶水 |
+
 ## 数据模型
 
 **节点（神经元）：** 带类型的记忆单元：
@@ -970,6 +1053,7 @@ opencode --session ses_166d0e7b9ffeBpCjAtqVkPPkP4
 - [Commonsense Foundation Spec](./docs/COMMONSENSE%E2%80%91FOUNDATION%E2%80%91SPEC.md) — 智能体如何将常识与伦理培育成它的安全层。
 - [Architecture & Safety Whitepaper](./docs/ARCHITECTURE%E2%80%91SAFETY%E2%80%91WHITEPAPER.md) — 系统架构与安全模型。
 - [Working with a Local LLM](./docs/case-of-working-with-local-llm.md) — 对观察者 / 学生 / 主力这三种本地 LLM 模式的逐步讲解。
+- [编写适配器](./docs/WRITING-ADAPTERS_CN.md) ([English](./docs/WRITING-ADAPTERS.md)) —— 基于 `core` 为任意 agent 宿主构建：三个契约、六个宿主钩子、以及最小接线骨架。
 
 ## 许可证
 
