@@ -1,8 +1,9 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Type } from "@sinclair/typebox";
-import { NeuralContextEngine, LightweightLinker } from "@ai-agent-local-memory/core";
-import { SqliteStorageProvider } from "@ai-agent-local-memory/storage-sqlite";
+import { NeuralContextEngine, LightweightLinker, Historian } from "@ai-agent-local-memory/core";
+import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
+import { createContextEngine } from "./context-engine.ts";
 
 interface NeuralContextConfig {
   storageDir?: string;
@@ -38,6 +39,7 @@ type OpenClawPluginApi = {
   registerMemoryRuntime?: (runtime: Record<string, unknown>) => void;
   on: (event: string, handler: (...args: unknown[]) => unknown) => void;
   registerService?: (service: Record<string, unknown>) => void;
+  registerContextEngine?: (id: string, factory: (ctx: Record<string, unknown>) => unknown) => { ok: boolean; existingOwner?: string } | void;
 };
 
 let engine: NeuralContextEngine;
@@ -289,7 +291,26 @@ export default {
       },
     }, { name: "neural_status" });
 
-
+    if (typeof api.registerContextEngine === "function") {
+      const compartmentStore = new CompartmentStore(storage.getDb());
+      const historian = new Historian({ llm: { complete: async () => "" } as any });
+      const factory = () =>
+        createContextEngine({
+          storage,
+          compartmentStore,
+          historian,
+          config: (cfg as unknown) as Record<string, unknown>,
+          logger: api.logger,
+        });
+      const res = api.registerContextEngine("neural-context", factory);
+      if (res && res.ok === false) {
+        api.logger.warn(
+          `neural-context: contextEngine slot already owned by "${res.existingOwner}" — compression disabled, memory still active`
+        );
+      } else {
+        api.logger.info("neural-context: contextEngine registered (owns compaction)");
+      }
+    }
 
     if (cfg.autoRecall) {
       api.on("before_prompt_build", buildRecallHandler(cfg));
