@@ -1,7 +1,7 @@
 import type {
   EngineConfig,
   EngineStats,
-  INeuralContextEngine,
+  INeuralMemoryEngine,
   LLMProvider,
   EmbeddingProvider,
   MemoryNode,
@@ -72,7 +72,7 @@ function tokenize(text: string): Set<string> {
   );
 }
 
-export class NeuralContextEngine implements INeuralContextEngine {
+export class NeuralMemoryEngine implements INeuralMemoryEngine {
   private config!: ResolvedConfig;
   private graph!: NeuralGraph;
   private hebbian!: HebbianLearning;

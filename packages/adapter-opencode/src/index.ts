@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, Hooks } from "@opencode-ai/plugin";
 import { tool } from "@opencode-ai/plugin";
-import { NeuralContextEngine, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, FallbackEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker, runCompartmentTransform, setActiveTokenizerModel, resolveContextWindow, countClaudeTokens, resolveToolTier, buildToolStub, toEpochMs, makeMsgTokensMemo } from "@ai-agent-local-memory/core";
+import { NeuralMemoryEngine, OpenAICompatibleLLM, OpenAICompatibleEmbedding, OllamaLLM, OllamaEmbedding, FallbackEmbedding, EmbeddingLinker, OperationLog, LoggedStorageProvider, Historian, LightweightLinker, runCompartmentTransform, setActiveTokenizerModel, resolveContextWindow, countClaudeTokens, resolveToolTier, buildToolStub, toEpochMs, makeMsgTokensMemo } from "@ai-agent-local-memory/core";
 import type { NodeType, RecallResult, MemoryNode, LLMProvider, EmbeddingProvider } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 
@@ -215,7 +215,7 @@ const AIAgentLocalMemoryPlugin: Plugin = async ({ directory, client }) => {
   const sessionId = projectIdFromDir(directory);
   const pluginConfig = loadConfig(directory);
   const rawStorage = new SqliteStorageProvider();
-  const engine = new NeuralContextEngine();
+  const engine = new NeuralMemoryEngine();
   const dataBase = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
   const episodesDir = join(dataBase, 'ai-agent-local-memory', 'episodes');
   const syncDir = join(dataBase, 'ai-agent-local-memory', 'sync');

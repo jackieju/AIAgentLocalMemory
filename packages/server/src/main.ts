@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import {
-  NeuralContextEngine,
+  NeuralMemoryEngine,
   NeuralGraph,
   WorkingMemory,
   ContextRenderer,
@@ -53,7 +53,7 @@ const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 
 interface Instance {
-  engine: NeuralContextEngine;
+  engine: NeuralMemoryEngine;
   storage: SqliteStorageProvider;
   graph: NeuralGraph;
   workingMemory: WorkingMemory;
@@ -80,7 +80,7 @@ async function getInstance(params: Record<string, unknown> | undefined): Promise
   if (existing) return existing;
 
   const storage = new SqliteStorageProvider({ storagePath: dbPath });
-  const engine = new NeuralContextEngine();
+  const engine = new NeuralMemoryEngine();
   const workingMemorySize =
     typeof params?.workingMemorySize === "number" ? params.workingMemorySize : 1000;
   const maxEdgesPerNode =

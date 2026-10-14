@@ -196,7 +196,7 @@ export interface EngineConfig {
  * The main NeuralContext engine interface.
  * Host-agnostic: does not import any AI framework SDK.
  */
-export interface INeuralContextEngine {
+export interface INeuralMemoryEngine {
   // Lifecycle
   init(config: EngineConfig): Promise<void>;
   shutdown(): Promise<void>;

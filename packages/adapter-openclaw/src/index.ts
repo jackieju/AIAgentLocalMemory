@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Type } from "@sinclair/typebox";
-import { NeuralContextEngine, LightweightLinker, Historian } from "@ai-agent-local-memory/core";
+import { NeuralMemoryEngine, LightweightLinker, Historian } from "@ai-agent-local-memory/core";
 import { SqliteStorageProvider, CompartmentStore } from "@ai-agent-local-memory/storage-sqlite";
 import { createContextEngine } from "./context-engine.ts";
 
@@ -42,7 +42,7 @@ type OpenClawPluginApi = {
   registerContextEngine?: (id: string, factory: (ctx: Record<string, unknown>) => unknown) => { ok: boolean; existingOwner?: string } | void;
 };
 
-let engine: NeuralContextEngine;
+let engine: NeuralMemoryEngine;
 let storage: SqliteStorageProvider;
 let linker: LightweightLinker;
 
@@ -184,7 +184,7 @@ export default {
     const episodesDir = join(storagePath, "episodes");
 
     storage = new SqliteStorageProvider();
-    engine = new NeuralContextEngine();
+    engine = new NeuralMemoryEngine();
     linker = new LightweightLinker(storage);
 
     engine.init({ storage, projectId: "global", episodesDir }).then(() => {

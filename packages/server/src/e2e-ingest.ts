@@ -9,7 +9,7 @@ import {
   NeuralGraph,
   WorkingMemory,
   ContextRenderer,
-  NeuralContextEngine,
+  NeuralMemoryEngine,
   type EngineConfig,
   type ContextRenderConfig,
   type SessionData,
@@ -26,7 +26,7 @@ function assert(cond: unknown, msg: string): void {
 
 async function ingestTurns(
   storage: SqliteStorageProvider,
-  engine: NeuralContextEngine,
+  engine: NeuralMemoryEngine,
   sd: SessionData,
 ): Promise<number> {
   const existing = await storage.queryNodes({ type: "episode", sourceSession: sd.id });
@@ -70,7 +70,7 @@ async function main() {
   const dbPath = join(dir, "graph.db");
   try {
     const storage = new SqliteStorageProvider({ storagePath: dbPath });
-    const engine = new NeuralContextEngine();
+    const engine = new NeuralMemoryEngine();
     const config: EngineConfig = { storage, projectId: "e2e", workingMemorySize: 1000, maxEdgesPerNode: 8 };
     await engine.init(config);
 
