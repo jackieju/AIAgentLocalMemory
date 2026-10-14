@@ -3064,6 +3064,39 @@ Skip the thinking block ONLY for pure greetings or one-word replies. For any rea
                 );
                 break;
               }
+              case "file": {
+                // OpenCode stores screenshots/images as `file` parts with the payload in
+                // `p.url` as a data URI (data:image/png;base64,....). Extract the base64 to
+                // a sidecar file next to the transcript and reference it with standard
+                // markdown image syntax so any renderer can display it. We never inline the
+                // base64 into the .md (it would bloat the file by hundreds of KB per image).
+                try {
+                  const url: string = typeof p.url === "string" ? p.url : "";
+                  const m = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+                  if (m) {
+                    const mime = m[1];
+                    const b64 = m[2];
+                    const ext = mime.split("/")[1]?.replace("+xml", "") || "png";
+                    // Content-hash name => identical images dedupe, re-runs are idempotent.
+                    const hash = createHash("sha1").update(b64).digest("hex").slice(0, 16);
+                    const assetsDirName = `${sid}-assets`;
+                    const assetsDir = join(transcriptDir, assetsDirName);
+                    mkdirSync(assetsDir, { recursive: true });
+                    const imgFile = `${hash}.${ext}`;
+                    const imgPath = join(assetsDir, imgFile);
+                    if (!existsSync(imgPath)) {
+                      writeFileSync(imgPath, Buffer.from(b64, "base64"));
+                    }
+                    // Relative path (md and assets share the transcripts/ parent) so the
+                    // image resolves in any markdown reader without an absolute path.
+                    blocks.push(`![image](${assetsDirName}/${imgFile})`);
+                  } else if (url) {
+                    // Non-data-URI file reference: keep the link as-is.
+                    blocks.push(`[file](${url})`);
+                  }
+                } catch { /* never let an image break transcript writing */ }
+                break;
+              }
               default:
                 break;
             }

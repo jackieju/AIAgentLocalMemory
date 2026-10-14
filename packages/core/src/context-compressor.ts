@@ -356,7 +356,14 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
         // model is actually charged for. Counting only part.text estimated tool parts as
         // ~0, so the tail budget kept 500+ messages whose real size was 200K+ tokens —
         // the true cause of "Input is too long" at a falsely-low reported usage.
+        const IMAGE_TOKEN_PLACEHOLDER = "x".repeat(5400);
         const partBillableText = (part: any): string => {
+          if (
+            part?.type === "file" || part?.type === "image" ||
+            (typeof part?.url === "string" && part.url.startsWith("data:image/"))
+          ) {
+            return IMAGE_TOKEN_PLACEHOLDER;
+          }
           if (typeof part?.text === "string" && part.text) return part.text;
           // tool_result parts in the transform array carry their payload under `content`
           // (shape {type, tool_use_id, content}); tool_use parts carry `input`. DB-shaped
