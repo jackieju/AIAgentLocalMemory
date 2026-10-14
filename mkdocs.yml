@@ -57,6 +57,8 @@ nav:
   - Guides (English):
       - Context Compression Pipeline: CONTEXT-COMPRESSION-PIPELINE.md
       - Compression Strategies (A/B/C/D): COMPRESSION-STRATEGIES.md
+      - Image Parts & Transcript Archives: IMAGE-PARTS-AND-TRANSCRIPTS.md
+      - Extended Thinking Compatibility: EXTENDED-THINKING-COMPATIBILITY.md
       - Fidelity Rendering (F0–F4): FIDELITY-RENDERING-F0-F4.md
       - Configuration Reference: CONFIGURATION-REFERENCE.md
       - Writing an Adapter: WRITING-ADAPTERS.md
