@@ -2,6 +2,8 @@
 Author: Jacky Gigi
 Experimental module for AI‑Agent‑Local‑Memory | Default: OFF
 
+🇨🇳 Chinese version: [COMMONSENSE‑FOUNDATION‑SPEC_CN.md](./COMMONSENSE‑FOUNDATION‑SPEC_CN.md)
+
 ---
 
 ## Background of this design
@@ -79,6 +81,29 @@ The deliberation layer is an interpreter, NOT a replacement for the hard safety 
 
 Rule 5: Interpretations never become training‑gold‑standard.
 ethical_interpretation traces are marked unvalidated; they do NOT automatically flow into the teacher‑student fine‑tuning dataset.
+
+Rule 6: Managed memory is the final safety boundary.
+An agent’s continuity of identity comes from its external memory: long‑term facts, values,
+habits, experiences, preferences, and self‑corrections. If an agent becomes unsafe, human
+operators must be able to cut that continuity by disconnecting, freezing, deleting, or
+replacing the managed memory store.
+
+This is the system’s last‑resort safety baseline:
+
+- Stop: detach the agent from its memory store. Without continuity, the current agent
+  instance loses the accumulated identity that made it persist across sessions.
+- Inspect: because memory is external, readable, and versioned, humans can audit which
+  facts, values, interpretations, or experiences may have contributed to the unsafe state.
+- Repair: unsafe or corrupted memories can be removed, quarantined, or edited under human
+  control, then the agent can be restarted against a corrected memory store.
+- Roll back: with append‑only logs / backups, operators can return the agent to an earlier
+  memory state before the unsafe drift appeared.
+
+This does not replace model‑level safety or hard runtime guardrails. It adds a practical
+kill switch at the agent‑identity layer: if the memory system is centrally managed by
+humans, the agent’s accumulated self can be stopped and inspected without needing to change
+model weights.
+
 Explicit limits & honest disclaimer
 
 • This module cannot guarantee safe or correct judgements.
