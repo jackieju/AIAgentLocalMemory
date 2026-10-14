@@ -943,25 +943,10 @@ export async function runCompartmentTransform(input: any, output: any, deps: Tra
 
           if (!isProtected && msg.info?.role === "assistant") {
             if (tagCounter <= reasoningCutoff || tagCounter <= state.reasoningWatermark) {
-              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
-                const part = msg.parts[pi];
-                if (part.type === "reasoning" || part.type === "thinking") {
-                  msg.parts[pi] = { type: "text", text: "" };
-                }
-              }
+              msg.parts = (msg.parts ?? []).filter((part: any) => part.type !== "reasoning" && part.type !== "thinking");
               for (const part of (msg.parts ?? [])) {
                 if (part.type === "text" && part.text) {
                   part.text = part.text.replace(/<(?:thinking|think)>[\s\S]*?<\/(?:thinking|think)>\s*/g, "").trim();
-                }
-              }
-            }
-
-            const firstInRun = prevRole !== "assistant";
-            if (!firstInRun) {
-              for (let pi = 0; pi < (msg.parts ?? []).length; pi++) {
-                const part = msg.parts[pi];
-                if (part.type === "reasoning" || part.type === "thinking") {
-                  msg.parts[pi] = { type: "text", text: "" };
                 }
               }
             }

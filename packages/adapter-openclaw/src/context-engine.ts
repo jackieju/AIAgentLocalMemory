@@ -396,6 +396,11 @@ export function createContextEngine(ctx: EngineCtx) {
           params.model,
           budget ?? undefined
         );
+        try {
+          const line = `${new Date().toISOString()} assemble sid=${params.sessionId} in=${(params.messages ?? []).length} out=${messages.length} estTok=${estimatedTokens} budget=${budget ?? "?"} model=${params.model ?? "?"}\n`;
+          require("node:fs").appendFileSync("/tmp/neural-openclaw-assemble.log", line);
+          ctx.logger?.info?.(`neural-context: assemble sid=${params.sessionId} in=${(params.messages ?? []).length} out=${messages.length} estTok=${estimatedTokens}`);
+        } catch {}
         return {
           messages,
           estimatedTokens,
