@@ -29,6 +29,7 @@ The next-generation memory architecture for **local-first, private, explainable,
 - **Cross-session shared memory** — one global memory graph is reused across every project and every session on the machine.
 - **Cross-machine memory sync** — the memory graph replicates between machines through a Git-backed append-only operation log (conflict-free, `neural_sync` push / pull / status).
 - **Cross-device session sync** — the full raw OpenCode session (messages, tool calls, reasoning) can be replayed on a second machine via `neural_session_import`, so you switch computers and keep writing where you left off.
+- **Cross-agent memory ** Different kind of agents (like opencode, openclaw) can use same memory store, so memory can be shared between all kinds of agents.
 - **Public and publishable Memory** - You can publish your memory anywhere (like github) or get others' public memory and merge with your own agenet memory, also others can get your agent memory and merge with his.
 - **Multilingual & semantic search** — SQLite FTS5 with `Intl.Segmenter` for CJK, plus optional embedding-based semantic recall through any OpenAI-compatible or Ollama endpoint.
 - **Automatic session persistence** — every conversation is mirrored to a readable Markdown transcript, and the underlying `opencode.db` is gzip-backed up daily to iCloud.
